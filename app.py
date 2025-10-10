@@ -75,7 +75,9 @@ sheet_name = st.text_input("Όνομα φύλλου (Sheet)", value="Sheet1")
 
 run = st.button("🔧 Generate")
 
-f run:
+if run:
+    import time
+
     if not xls:
         st.error("Ανέβασε Excel πρώτα.")
         st.stop()
@@ -83,27 +85,29 @@ f run:
         st.error("Ανέβασε και τα δύο templates.")
         st.stop()
 
-    # Διαγνωστικά αρχείων
-    st.info(f"📄 Excel size: {len(xls.getbuffer())/1024:.1f} KB | "
-            f"BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB")
+    # 1) Διαγνωστικά αρχείων
+    st.info(
+        f"📄 Excel: {len(xls.getbuffer())/1024:.1f} KB | "
+        f"BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB"
+    )
 
-    # >>> ΝΕΟ: δείξε διαθέσιμα sheets και διάβασε με openpyxl
+    # 2) Δείξε διαθέσιμα sheets & διάβασε με openpyxl
     with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):
         try:
             xfile = pd.ExcelFile(xls, engine="openpyxl")
-            st.write("📑 Διαθέσιμα sheets:", xfile.sheet_names)
+            st.write("📑 Sheets:", xfile.sheet_names)
             if sheet_name not in xfile.sheet_names:
                 st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
                 st.stop()
-            df = pd.read_excel(xfile, sheet_name=sheet_name)
+            # αν έχεις τεράστιο Excel, διάβασε αρχικά λίγο για test:
+            df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
+            # εναλλακτικά test: df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl", nrows=2000)
         except Exception as e:
             st.error(f"Δεν άνοιξε το Excel: {e}")
             st.stop()
 
     st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
-    st.dataframe(df.head(5))
-
-
+    st.dataframe(df.head(10))
     cols = list(df.columns)
 
     # ---- AUTO-MAP με βάση το screenshot σου ----
@@ -118,7 +122,7 @@ f run:
     col_plan_vs     = pick(cols, "plan vs target", r"plan.*vs.*target")
 
     # προβολή που βρήκαμε
-    with st.expander("Χαρτογράφηση (auto)"):
+     with st.expander("Χαρτογράφηση (auto)"):
         st.write({
             "STORE": col_store, "BEX": col_bex,
             "mobile_actual": col_mob_act, "mobile_target": col_mob_tgt,
@@ -127,9 +131,11 @@ f run:
             "plan_vs_target": col_plan_vs
         })
 
-   tpl_bex_bytes = tpl_bex.read()
+   # 4) Templates σε μνήμη
+    tpl_bex_bytes = tpl_bex.read()
     tpl_nonbex_bytes = tpl_nonbex.read()
 
+    # 5) Δημιουργία αρχείων με progress
     out_zip = io.BytesIO()
     z = zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED)
     built = 0
@@ -140,8 +146,7 @@ f run:
     def cell(row, col):
         if not col: return ""
         v = row[col]
-        if pd.isna(v): return ""
-        return v
+        return "" if pd.isna(v) else v
 
     for i, (_, row) in enumerate(df.iterrows(), start=1):
         try:
@@ -151,6 +156,7 @@ f run:
                 continue
             store_up = store.upper()
 
+            # BEX flag
             if bex_mode == "Λίστα (comma-separated)":
                 is_bex = store_up in bex_list
             else:
@@ -186,7 +192,7 @@ f run:
 
     z.close()
     if built == 0:
-        st.error("Δεν δημιουργήθηκε αρχείο. Έλεγξε αν αναγνωρίστηκε η στήλη STORE και τα templates.")
+        st.error("Δεν δημιουργήθηκε αρχείο. Έλεγξε STORE mapping & templates.")
     else:
         st.success(f"Έτοιμα {built} αρχεία.")
         st.download_button("⬇️ Κατέβασε ZIP", data=out_zip.getvalue(), file_name="reviews_from_excel.zip")
