@@ -114,7 +114,7 @@ with st.sidebar:
     st.caption("Χρησιμοποίησε placeholders όπως [[review_mobile_actual]], [[plan_mobile_target]], [[title]], [[store]].")
 
 st.markdown("### 1) Ανέβασε τα PDFs σου")
-st.caption("Ονόμασε τα αρχεία ως <STORE>_Review.pdf και <STORE>_Plan.pdf (π.χ. ESC01_Review.pdf, ESC01_Plan.pdf).")
+st.caption("Ονόμασε τα αρχεία ως <STORE>_Business Review.pdf και <STORE>_Action Plan.pdf (π.χ. ESC01_Review.pdf, ESC01_Plan.pdf).")
 uploaded = st.file_uploader("PDFs", type=["pdf"], accept_multiple_files=True)
 
 st.markdown("### 2) Δώσε λίστα καταστημάτων")
