@@ -57,6 +57,7 @@ def pick(columns, *aliases):
 def cell(row, col):
     if not col:
         return ""
+    # Επειδή το row προέρχεται από Series/itertuples, πρέπει να είναι row[col]
     v = row[col]
     return "" if pd.isna(v) else v
 
@@ -97,8 +98,7 @@ if run:
         f"BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB"
     )
 
-    # Διαβάζουμε Excel με openpyxl και δείχνουμε διαθέσιμα sheets
-       # 2) Δείξε διαθέσιμα sheets & διάβασε με openpyxl
+    # 1) Διαβάζουμε Excel με openpyxl και δείχνουμε διαθέσιμα sheets
     with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):
         try:
             xfile = pd.ExcelFile(xls, engine="openpyxl")
@@ -106,18 +106,17 @@ if run:
             if sheet_name not in xfile.sheet_names:
                 st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
                 st.stop()
-            # αν έχεις τεράστιο Excel, διάβασε αρχικά λίγο για test:
+            # Διαβάζουμε όλο το DataFrame
             df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
-            # εναλλακτικά test: df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl", nrows=2000)
         except Exception as e:
             st.error(f"Δεν άνοιξε το Excel: {e}")
             st.stop()
 
+    # --- ΑΥΤΟΣ Ο ΚΩΔΙΚΑΣ ΕΠΡΕΠΕ ΝΑ ΕΙΝΑΙ ΕΔΩ (ΜΕΣΑ ΣΤΟ if run:) ---
 
-st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
-if debug_mode:
-    st.dataframe(df.head(10))
-
+    st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
+    if debug_mode:
+        st.dataframe(df.head(10))
 
     cols = list(df.columns)
 
@@ -150,59 +149,67 @@ if debug_mode:
 
     out_zip = io.BytesIO()
     z = zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED)
-    built = 0
+    built = 0 # Η μεταβλητή για τον μετρητή των αρχείων.
 
     pbar = st.progress(0, text="Δημιουργία εγγράφων...")
-    total = max(1, len(df))
-max_rows = 50 if test_mode else len(df)
-for i, (_, row) in enumerate(df.itertuples(index=False), start=1):
-    if i > max_rows:
-        if debug_mode:
-            st.info(f"🧪 Test mode: σταμάτησα στις {max_rows} γραμμές.")
-        break
-    try:
-        row = pd.Series(row, index=df.columns)  # για να δουλεύει το cell(...)
-        store = str(cell(row, col_store)).strip()
-        if not store:
-            pbar.progress(min(i/max_rows, 1.0), text=f"Παράλειψη γραμμής {i} (κενό store)")
-            continue
+    # total = max(1, len(df)) # Δεν χρειάζεται, μπορούμε να χρησιμοποιήσουμε την max_rows
+    
+    max_rows = 50 if test_mode else len(df)
+    
+    for i, row_tuple in enumerate(df.itertuples(index=False), start=1):
+        if i > max_rows:
+            if debug_mode:
+                st.info(f"🧪 Test mode: σταμάτησα στις {max_rows} γραμμές.")
+            break
+        try:
+            # Μετατροπή του tuple σε Series για να δουλέψει σωστά το cell(...)
+            row = pd.Series(row_tuple, index=df.columns) 
+            store = str(cell(row, col_store)).strip()
+            
+            if not store:
+                # Χρησιμοποιούμε max_rows για τον υπολογισμό της προόδου
+                pbar.progress(min(i/max_rows, 1.0), text=f"Παράλειψη γραμμής {i} (κενό store)")
+                continue
 
-        store_up = store.upper()
-        if bex_mode == "Λίστα (comma-separated)":
-            is_bex = store_up in bex_list
-        else:
-            bex_val = str(cell(row, col_bex)).strip().lower()
-            is_bex = bex_val in ("yes", "y", "1", "true", "ναι")
+            store_up = store.upper()
+            if bex_mode == "Λίστα (comma-separated)":
+                is_bex = store_up in bex_list
+            else:
+                bex_val = str(cell(row, col_bex)).strip().lower()
+                is_bex = bex_val in ("yes", "y", "1", "true", "ναι")
 
-        mapping = {
-            "title": f"Review September 2025 — Plan October 2025 — {store_up}",
-            "store": store_up,
-            "mobile_actual":  cell(row, col_mob_act),
-            "mobile_target":  cell(row, col_mob_tgt),
-            "fixed_actual":   cell(row, col_fix_act),
-            "fixed_target":   cell(row, col_fix_tgt),
-            "pending_mobile": cell(row, col_pend_mob),
-            "pending_fixed":  cell(row, col_pend_fix),
-            "plan_vs_target": cell(row, col_plan_vs),
-        }
+            mapping = {
+                "title": f"Review September 2025 — Plan October 2025 — {store_up}",
+                "store": store_up,
+                "mobile_actual":  cell(row, col_mob_act),
+                "mobile_target":  cell(row, col_mob_tgt),
+                "fixed_actual":   cell(row, col_fix_act),
+                "fixed_target":   cell(row, col_fix_tgt),
+                "pending_mobile": cell(row, col_pend_mob),
+                "pending_fixed":  cell(row, col_pend_fix),
+                "plan_vs_target": cell(row, col_plan_vs),
+            }
 
-        tpl_bytes = tpl_bex_bytes if is_bex else tpl_nonbex_bytes
-        doc = Document(io.BytesIO(tpl_bytes))
-        set_default_font(doc, "Aptos")
-        replace_placeholders(doc, mapping)
+            tpl_bytes = tpl_bex_bytes if is_bex else tpl_nonbex_bytes
+            doc = Document(io.BytesIO(tpl_bytes))
+            set_default_font(doc, "Aptos")
+            replace_placeholders(doc, mapping)
 
-        out_name = f"{store_up}_ReviewSep_PlanOct.docx"
-        buf = io.BytesIO()
-        doc.save(buf)
-        z.writestr(out_name, buf.getvalue())
+            out_name = f"{store_up}_ReviewSep_PlanOct.docx"
+            buf = io.BytesIO()
+            doc.save(buf)
+            z.writestr(out_name, buf.getvalue())
+            
+            # --- ΠΡΟΣΘΗΚΗ: Αυξάνουμε τον μετρητή επιτυχημένων αρχείων ---
+            built += 1 
 
-        pbar.progress(min(i/max_rows, 1.0), text=f"Φτιάχνω: {out_name} ({i}/{max_rows})")
-    except Exception as e:
-        st.warning(f"⚠️ Σφάλμα στη γραμμή {i}: {e}")
-        if debug_mode:
-            st.exception(e)
+            pbar.progress(min(i/max_rows, 1.0), text=f"Φτιάχνω: {out_name} ({i}/{max_rows})")
+        except Exception as e:
+            st.warning(f"⚠️ Σφάλμα στη γραμμή {i}: {e}")
+            if debug_mode:
+                st.exception(e)
 
-
+    # --- ΤΟ ΤΕΛΟΣ ΤΟΥ if run: BLOCK ---
     z.close()
     if built == 0:
         st.error("Δεν δημιουργήθηκε αρχείο. Έλεγξε STORE mapping & templates.")
