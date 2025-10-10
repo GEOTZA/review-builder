@@ -98,20 +98,16 @@ if run:
     )
 
     # Διαβάζουμε Excel με openpyxl και δείχνουμε διαθέσιμα sheets
-    with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):
+   with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):
     try:
         xfile = pd.ExcelFile(xls, engine="openpyxl")
-        if debug_mode:
-            st.write("📑 Sheets:", xfile.sheet_names)
+        st.write("📑 Sheets:", xfile.sheet_names)
         if sheet_name not in xfile.sheet_names:
-            st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διαθέσιμα: {xfile.sheet_names}")
+            st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
             st.stop()
-        read_kwargs = {"engine": "openpyxl"}
-        if test_mode:
-            read_kwargs["nrows"] = 50   # φόρτωσε μόνο 50 γραμμές για δοκιμή
-        df = pd.read_excel(xfile, sheet_name=sheet_name, **read_kwargs)
+        df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
     except Exception as e:
-        st.exception(e)
+        st.error(f"Δεν άνοιξε το Excel: {e}")
         st.stop()
 
 st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
