@@ -98,19 +98,22 @@ if run:
         f"BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB"
     )
 
-    # 1) Διαβάζουμε Excel με openpyxl και δείχνουμε διαθέσιμα sheets
-    with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):
-        try:
-            xfile = pd.ExcelFile(xls, engine="openpyxl")
-            st.write("📑 Sheets:", xfile.sheet_names)
-            if sheet_name not in xfile.sheet_names:
-                st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
-                st.stop()
-            # Διαβάζουμε όλο το DataFrame
-            df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
-        except Exception as e:
-            st.error(f"Δεν άνοιξε το Excel: {e}")
+    #1) Διαβάζουμε Excel με openpyxl και δείχνουμε διαθέσιμα sheets
+    #2) Δείξε διαθέσιμα sheets & διάβασε με openpyxl
+with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):
+    try:
+        xfile = pd.ExcelFile(xls, engine="openpyxl")
+        st.write("📑 Sheets:", xfile.sheet_names)
+        if sheet_name not in xfile.sheet_names:
+            st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
             st.stop()
+        # αν έχεις τεράστιο Excel, διάβασε αρχικά λίγο για test:
+        df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
+        # εναλλακτικά test: df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl", nrows=2000)
+    except Exception as e:
+        st.error(f"Δεν άνοιξε το Excel: {e}")
+        st.stop()
+
 
     # --- ΑΥΤΟΣ Ο ΚΩΔΙΚΑΣ ΕΠΡΕΠΕ ΝΑ ΕΙΝΑΙ ΕΔΩ (ΜΕΣΑ ΣΤΟ if run:) ---
 
