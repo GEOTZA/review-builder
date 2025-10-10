@@ -62,6 +62,8 @@ def cell(row, col):
 
 # ---------- UI ----------
 st.title("📊 Excel → 📄 Review/Plan Generator (BEX & Non-BEX)")
+debug_mode = st.sidebar.toggle("🛠 Debug mode", value=True)
+test_mode  = st.sidebar.toggle("🧪 Test mode (limit rows=50)", value=True)
 
 with st.sidebar:
     st.header("⚙️ BEX")
@@ -97,19 +99,25 @@ if run:
 
     # Διαβάζουμε Excel με openpyxl και δείχνουμε διαθέσιμα sheets
     with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):
-        try:
-            xfile = pd.ExcelFile(xls, engine="openpyxl")
+    try:
+        xfile = pd.ExcelFile(xls, engine="openpyxl")
+        if debug_mode:
             st.write("📑 Sheets:", xfile.sheet_names)
-            if sheet_name not in xfile.sheet_names:
-                st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Επιλέξτε ένα από: {xfile.sheet_names}")
-                st.stop()
-            df = pd.read_excel(xfile, sheet_name=sheet_name)
-        except Exception as e:
-            st.error(f"Δεν άνοιξε το Excel: {e}")
+        if sheet_name not in xfile.sheet_names:
+            st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διαθέσιμα: {xfile.sheet_names}")
             st.stop()
+        read_kwargs = {"engine": "openpyxl"}
+        if test_mode:
+            read_kwargs["nrows"] = 50   # φόρτωσε μόνο 50 γραμμές για δοκιμή
+        df = pd.read_excel(xfile, sheet_name=sheet_name, **read_kwargs)
+    except Exception as e:
+        st.exception(e)
+        st.stop()
 
-    st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
+st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
+if debug_mode:
     st.dataframe(df.head(10))
+
 
     cols = list(df.columns)
 
@@ -146,49 +154,54 @@ if run:
 
     pbar = st.progress(0, text="Δημιουργία εγγράφων...")
     total = max(1, len(df))
+max_rows = 50 if test_mode else len(df)
+for i, (_, row) in enumerate(df.itertuples(index=False), start=1):
+    if i > max_rows:
+        if debug_mode:
+            st.info(f"🧪 Test mode: σταμάτησα στις {max_rows} γραμμές.")
+        break
+    try:
+        row = pd.Series(row, index=df.columns)  # για να δουλεύει το cell(...)
+        store = str(cell(row, col_store)).strip()
+        if not store:
+            pbar.progress(min(i/max_rows, 1.0), text=f"Παράλειψη γραμμής {i} (κενό store)")
+            continue
 
-    for i, (_, row) in enumerate(df.iterrows(), start=1):
-        try:
-            store = str(cell(row, col_store)).strip()
-            if not store:
-                pbar.progress(min(i/total, 1.0), text=f"Παράλειψη γραμμής {i} (κενό store)")
-                continue
-            store_up = store.upper()
+        store_up = store.upper()
+        if bex_mode == "Λίστα (comma-separated)":
+            is_bex = store_up in bex_list
+        else:
+            bex_val = str(cell(row, col_bex)).strip().lower()
+            is_bex = bex_val in ("yes", "y", "1", "true", "ναι")
 
-            # BEX flag
-            if bex_mode == "Λίστα (comma-separated)":
-                is_bex = store_up in bex_list
-            else:
-                bex_val = str(cell(row, col_bex)).strip().lower()
-                is_bex = bex_val in ("yes", "y", "1", "true", "ναι")
+        mapping = {
+            "title": f"Review September 2025 — Plan October 2025 — {store_up}",
+            "store": store_up,
+            "mobile_actual":  cell(row, col_mob_act),
+            "mobile_target":  cell(row, col_mob_tgt),
+            "fixed_actual":   cell(row, col_fix_act),
+            "fixed_target":   cell(row, col_fix_tgt),
+            "pending_mobile": cell(row, col_pend_mob),
+            "pending_fixed":  cell(row, col_pend_fix),
+            "plan_vs_target": cell(row, col_plan_vs),
+        }
 
-            mapping = {
-                "title": f"Review September 2025 — Plan October 2025 — {store_up}",
-                "store": store_up,
-                "mobile_actual":  cell(row, col_mob_act),
-                "mobile_target":  cell(row, col_mob_tgt),
-                "fixed_actual":   cell(row, col_fix_act),
-                "fixed_target":   cell(row, col_fix_tgt),
-                "pending_mobile": cell(row, col_pend_mob),
-                "pending_fixed":  cell(row, col_pend_fix),
-                "plan_vs_target": cell(row, col_plan_vs),
-            }
+        tpl_bytes = tpl_bex_bytes if is_bex else tpl_nonbex_bytes
+        doc = Document(io.BytesIO(tpl_bytes))
+        set_default_font(doc, "Aptos")
+        replace_placeholders(doc, mapping)
 
-            tpl_bytes = tpl_bex_bytes if is_bex else tpl_nonbex_bytes
-            doc = Document(io.BytesIO(tpl_bytes))
-            set_default_font(doc, "Aptos")
-            replace_placeholders(doc, mapping)
+        out_name = f"{store_up}_ReviewSep_PlanOct.docx"
+        buf = io.BytesIO()
+        doc.save(buf)
+        z.writestr(out_name, buf.getvalue())
 
-            out_name = f"{store_up}_ReviewSep_PlanOct.docx"
-            buf = io.BytesIO()
-            doc.save(buf)
-            z.writestr(out_name, buf.getvalue())
-            built += 1
-            pbar.progress(min(i/total, 1.0), text=f"Φτιάχνω: {out_name} ({i}/{total})")
+        pbar.progress(min(i/max_rows, 1.0), text=f"Φτιάχνω: {out_name} ({i}/{max_rows})")
+    except Exception as e:
+        st.warning(f"⚠️ Σφάλμα στη γραμμή {i}: {e}")
+        if debug_mode:
+            st.exception(e)
 
-        except Exception as e:
-            st.warning(f"⚠️ Σφάλμα στη γραμμή {i}: {e}")
-            pbar.progress(min(i/total, 1.0), text=f"Συνεχίζω… ({i}/{total})")
 
     z.close()
     if built == 0:
