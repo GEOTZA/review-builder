@@ -1,4 +1,6 @@
-streamlit>=1.31.0
-pdfminer.six>=20221105
-python-docx>=0.8.11
-pandas>=2.0.0
+streamlit==1.36.0
+pdfminer.six==20221105
+python-docx==0.8.11
+pandas==2.2.2
+numpy==1.26.4
+openpyxl==3.1.5
