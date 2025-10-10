@@ -1,6 +1,7 @@
 import streamlit as st
-import re, os, io, json, zipfile
-from typing import Dict, Any, List, Tuple
+import io, zipfile, re, json
+import pandas as pd
+from typing import Dict, Any
 from docx import Document
 from docx.oxml.ns import qn
 
@@ -10,7 +11,7 @@ try:
 except Exception:
     extract_text = None
 
-st.set_page_config(page_title="Review/Plan Generator", layout="wide")
+st.set_page_config(page_title="Excel KPIs + Review (PDF/Manual)", layout="wide")
 
 # ---------- helpers ----------
 def set_default_font(doc, font_name="Aptos"):
@@ -23,49 +24,13 @@ def set_default_font(doc, font_name="Aptos"):
             except Exception:
                 pass
 
-def read_pdf_text_from_bytes(file_bytes: bytes) -> str:
-    """Return extracted text or empty string; never raises to the UI."""
-    if extract_text is None:
-        return ""
-    try:
-        bio = io.BytesIO(file_bytes)
-        txt = extract_text(bio) or ""
-        return txt
-    except Exception:
-        return ""
-
-def parse_metrics(text: str, patterns: Dict[str, str]) -> Dict[str, Any]:
-    """
-    Extract values using regex patterns; robust to errors.
-    Keeps values as strings (no forced float cast).
-    """
-    results: Dict[str, Any] = {}
-    for key, pat in patterns.items():
-        try:
-            m = re.search(pat, text, re.IGNORECASE | re.MULTILINE | re.DOTALL)
-        except re.error as e:
-            results[key] = f"[Regex error: {e}]"
-            continue
-        if m:
-            try:
-                # prefer last capturing group if multiple
-                val = (m.group(m.lastindex) if m.lastindex else m.group(1))
-            except Exception:
-                val = m.group(0)
-            val = (val or "").strip()
-            val = val.replace(",", ".")
-            results[key] = val
-        else:
-            results[key] = ""
-    return results
-
 def replace_placeholders(doc: Document, mapping: Dict[str, Any]):
     def repl_text(s: str) -> str:
         def rfun(m):
             k = m.group(1)
-            return str(mapping.get(k, ""))
+            v = mapping.get(k, "")
+            return "" if v is None else str(v)
         return re.sub(r"\[\[([A-Za-z0-9_]+)\]\]", rfun, s)
-
     for p in doc.paragraphs:
         for r in p.runs:
             r.text = repl_text(r.text)
@@ -76,26 +41,33 @@ def replace_placeholders(doc: Document, mapping: Dict[str, Any]):
                     for r in p.runs:
                         r.text = repl_text(r.text)
 
+def read_pdf_text(name: str, data: bytes) -> str:
+    if extract_text is None: 
+        return ""
+    try:
+        return extract_text(io.BytesIO(data)) or ""
+    except Exception:
+        return ""
+
+def guess_col(columns, *keys):
+    """Ευρετική: βρίσκει 1η στήλη που ταιριάζει σε keywords."""
+    for k in keys:
+        pat = re.compile(k, re.IGNORECASE)
+        for c in columns:
+            if re.search(pat, str(c)):
+                return c
+    return None
+
 def parse_file_role(name: str):
     """
-    Χαλαρή αναγνώριση STORE + ρόλου (review/plan) από filename.
-    Δέχεται:
-      <STORE>_Business Review.pdf
-      <STORE>_Action Plan.pdf
-      <STORE>-Business-Review.pdf
-      <STORE> BusinessReview.pdf
-      <STORE>_review.pdf
-      <STORE>_plan.pdf
-      <STORE>_ActionPlan.pdf
-      <STORE>_BusinessReview.pdf
+    Χαλαρό matching για filenames:
+      <STORE>_Business Review.pdf, <STORE>_Action Plan.pdf
+      ή ESC01_Review.pdf / ESC01_Plan.pdf κ.λπ.
     """
     base = name.strip()
     if base.lower().endswith(".pdf"):
         base = base[:-4]
-    # συμπύκνωσε πολλαπλά κενά
     base = re.sub(r"\s+", " ", base)
-
-    # Πάρε το STORE ως πρώτο κομμάτι
     m_store = re.match(r"^\s*([A-Za-z0-9]+)[\s_\-]+(.+)$", base)
     if not m_store:
         only_code = re.match(r"^\s*([A-Za-z0-9]+)\s*$", base)
@@ -104,154 +76,160 @@ def parse_file_role(name: str):
         return None, None
     store = m_store.group(1).upper()
     tail = m_store.group(2).strip().lower()
-
-    # compact για εύκολα matches
     compact = re.sub(r"[\s_\-]+", "", tail)
-
-    # review keys
-    review_keys = ["businessreview", "review"]
-    # plan keys
-    plan_keys = ["actionplan", "plan"]
-
-    if any(k in compact for k in review_keys) or tail.endswith("review"):
+    if any(k in compact for k in ["businessreview","review"]):
         return store, "review"
-    if any(k in compact for k in plan_keys) or tail.endswith("plan"):
+    if any(k in compact for k in ["actionplan","plan"]):
         return store, "plan"
-
-    # fallback
-    if "review" in compact:
-        return store, "review"
-    if "plan" in compact:
-        return store, "plan"
+    if "review" in compact: return store, "review"
+    if "plan" in compact:   return store, "plan"
     return store, None
 
 # ---------- UI ----------
-st.title("📄 Review/Plan Generator (BEX & Non-BEX)")
+st.title("📊 KPIs από Excel + 📝 Review από PDF/Manual")
 
 with st.sidebar:
-    st.header("⚙️ Settings")
-    st.caption("Ορίσε BEX λίστα & regex extraction (JSON).")
-    bex_input = st.text_area("BEX stores (comma-separated)", "ESC01,FKM01,LND01,DRZ01,PKK01")
-    bex_set = set([s.strip().upper() for s in bex_input.split(",") if s.strip()])
-
-    default_review_patterns = {
-        "mobile_actual": r"Κινητ(ή|ης).*?(\d+)\s*(ενεργοποιήσεις|γραμμές)",
-        "fixed_actual":  r"Σταθερ(ή|ής).*?(\d+)\s*(ενεργοποιήσεις|γραμμές)",
-        "ftth_actual":   r"FTTH.*?(\d+)",
-        "fwa_actual":    r"FWA.*?(\d+)",
-        "eon_actual":    r"(EON|TV).*?(\d+)",
-        # μπορείς να προσθέσεις κι άλλα, π.χ. pending:
-        # "pending_mobile": r"pending.*?κινητ.*?(\d+)"
-    }
-    default_plan_patterns = {
-        "mobile_target": r"(?i)κινητ[ήής].*?(\d+)\s*(?:γρ|lines|γραφ|ενεργ)",
-        "fixed_target":  r"(?i)σταθερ[ήής].*?(\d+)\s*(?:γρ|lines|γραφ|ενεργ)",
-        "ftth_target":   r"(?i)ftth.*?(\d+)",
-        "fwa_target":    r"(?i)fwa.*?(\d+)",
-        "eon_target":    r"(?i)(eon|tv).*?(\d+)"
-    }
-    review_patterns_json = st.text_area("Review regex (JSON)", json.dumps(default_review_patterns, ensure_ascii=False, indent=2))
-    plan_patterns_json   = st.text_area("Plan regex (JSON)", json.dumps(default_plan_patterns, ensure_ascii=False, indent=2))
-    try:
-        review_patterns = json.loads(review_patterns_json)
-        plan_patterns = json.loads(plan_patterns_json)
-    except Exception as e:
-        st.error(f"JSON error: {e}")
-        st.stop()
+    st.header("⚙️ Ρυθμίσεις")
+    bex_mode = st.radio("BEX ορισμός", ["Λίστα (comma-separated)", "Στήλη στο Excel"], index=0)
+    bex_list = set()
+    bex_col = None
+    if bex_mode == "Λίστα (comma-separated)":
+        bex_input = st.text_area("BEX stores", "ESC01,FKM01,LND01,DRZ01,PKK01")
+        bex_list = set([s.strip().upper() for s in bex_input.split(",") if s.strip()])
 
     st.subheader("📄 Templates (.docx)")
     tpl_bex = st.file_uploader("BEX template", type=["docx"], key="tpl_bex")
     tpl_nonbex = st.file_uploader("Non-BEX template", type=["docx"], key="tpl_nonbex")
-    st.caption("Placeholders: [[review_mobile_actual]], [[plan_mobile_target]], [[title]], [[store]], κ.λπ.")
+    st.caption("Placeholders: [[title]], [[store]], [[plan_month]], [[mobile_actual]], [[fixed_actual]], [[mobile_target]], [[fixed_target]], [[review_body]]")
 
-st.markdown("### 1) Ανέβασε PDFs")
-st.caption("Δεκτές ονομασίες (χαλαρό matching): <STORE>_Business Review.pdf & <STORE>_Action Plan.pdf, αλλά και ESC01_Review.pdf/ESC01_Plan.pdf, με ή χωρίς παύλες/κενά.")
-uploaded = st.file_uploader("PDFs", type=["pdf"], accept_multiple_files=True)
+st.markdown("### 1) Ανέβασε Excel (KPIs)")
+xls = st.file_uploader("Excel (xlsx)", type=["xlsx"])
+sheet_name = st.text_input("Sheet name", value="Sheet1")
 
-st.markdown("### 2) Δώσε λίστα καταστημάτων")
+st.markdown("### 2) Ανέβασε τα Business Review PDFs (προαιρετικά)")
+st.caption("Φόρτωσε αρχεία τύπου <STORE>_Business Review.pdf (ή ESC01_Review.pdf κ.λπ.). Αν δεν έχει κείμενο/λείπει, θα μπορείς να γράψεις manual review.")
+uploaded_pdfs = st.file_uploader("PDFs", type=["pdf"], accept_multiple_files=True)
+
+st.markdown("### 3) Λίστα καταστημάτων")
 store_list_text = st.text_area("STORE codes (ένα ανά γραμμή)", "ESC01\nLCI01\nLGS01\nLND01")
 
-run = st.button("🔧 Parse & Generate")
+run = st.button("🔧 Generate DOCX")
 
 if run:
-    if not uploaded:
-        st.error("Ανέβασε πρώτα τα PDFs.")
+    # --- validations
+    if not xls:
+        st.error("Ανέβασε Excel πρώτα.")
         st.stop()
     if not tpl_bex or not tpl_nonbex:
         st.error("Ανέβασε και τα δύο templates (.docx).")
         st.stop()
-    if extract_text is None:
-        st.error("Λείπει pdfminer.six στο περιβάλλον.")
+
+    # --- read Excel
+    try:
+        df = pd.read_excel(xls, sheet_name=sheet_name)
+    except Exception as e:
+        st.error(f"Αποτυχία ανάγνωσης Excel: {e}")
+        st.stop()
+    if df.empty:
+        st.error("Το Excel είναι άδειο.")
         st.stop()
 
-    # index uploaded files
-    pdf_map = {}
-    unmatched = []
-    for f in uploaded:
-        store, role = parse_file_role(f.name)
-        if not store or not role:
-            unmatched.append(f.name)
-            continue
-        pdf_map.setdefault(store, {})[role] = f
-    if unmatched:
-        st.warning("Μη αναγνωρισμένα filenames: " + ", ".join(unmatched))
+    cols = list(df.columns)
+    # auto-guess για τα 6 βασικά
+    col_store       = guess_col(cols, r"shop|store|dealer|code|shop_code|store_code|κατάστημα")
+    col_mobile_act  = guess_col(cols, r"^mobile.*actual$|mobileactual|κινητ.*actual|κινητ.*παραγ")
+    col_fixed_act   = guess_col(cols, r"^total.*fixed.*actual$|fixed.*actual|σταθερ.*actual|σταθερ.*παραγ")
+    col_mobile_tgt  = guess_col(cols, r"^mobile.*(target|plan)$|κινητ.*(στόχος|πλάνο)")
+    col_fixed_tgt   = guess_col(cols, r"^fixed.*(target|plan)$|σταθερ.*(στόχος|πλάνο)")
+    col_plan_month  = guess_col(cols, r"^plan.*month$|μήνας.*πλάνου|μηνας.*πλανου")
+    if bex_mode == "Στήλη στο Excel":
+        bex_col = guess_col(cols, r"^bex$|bex store|is_bex|bex_yes_no")
 
-    # load templates
+    with st.expander("Χαρτογράφηση πεδίων (auto-guess)"):
+        col_store      = st.selectbox("STORE", options=cols, index=(cols.index(col_store) if col_store in cols else 0))
+        if bex_mode == "Στήλη στο Excel":
+            bex_col = st.selectbox("BEX column", options=["(none)"] + cols, index=((cols.index(bex_col)+1) if bex_col in cols else 0))
+            if bex_col == "(none)": bex_col = None
+        col_mobile_act = st.selectbox("Mobile Actual", options=["(none)"] + cols, index=((cols.index(col_mobile_act)+1) if col_mobile_act in cols else 0))
+        col_fixed_act  = st.selectbox("Fixed Actual",  options=["(none)"] + cols, index=((cols.index(col_fixed_act)+1) if col_fixed_act  in cols else 0))
+        col_mobile_tgt = st.selectbox("Mobile Target", options=["(none)"] + cols, index=((cols.index(col_mobile_tgt)+1) if col_mobile_tgt in cols else 0))
+        col_fixed_tgt  = st.selectbox("Fixed Target",  options=["(none)"] + cols, index=((cols.index(col_fixed_tgt)+1) if col_fixed_tgt  in cols else 0))
+        col_plan_month = st.selectbox("Plan Month (optional)", options=["(none)"] + cols, index=((cols.index(col_plan_month)+1) if col_plan_month in cols else 0))
+
+    # --- index PDFs
+    pdf_map = {}
+    if uploaded_pdfs:
+        for f in uploaded_pdfs:
+            store, role = parse_file_role(f.name)
+            if store and (role == "review"):
+                pdf_map[store] = f.read()
+
+    # --- load templates
     tpl_bex_bytes = tpl_bex.read()
     tpl_nonbex_bytes = tpl_nonbex.read()
 
-    # prepare zip
+    # --- build all
     out_zip = io.BytesIO()
     z = zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED)
 
     stores = [s.strip().upper() for s in store_list_text.splitlines() if s.strip()]
     built = 0
 
-    for code in stores:
-        cols = st.columns([1,2,2])
-        cols[0].markdown(f"**{code}**")
-
-        pair = pdf_map.get(code, {})
-        rfile = pair.get("review")
-        pfile = pair.get("plan")
-        if not rfile or not pfile:
-            cols[1].warning("Λείπει Business Review ή Action Plan PDF.")
+    for _, row in df.iterrows():
+        store = str(row[col_store]).strip() if not pd.isna(row[col_store]) else ""
+        if not store or store.upper() not in stores:
             continue
+        store_up = store.upper()
 
-        rbytes = rfile.read()
-        pbytes = pfile.read()
+        # BEX flag
+        is_bex = False
+        if bex_mode == "Λίστα (comma-separated)":
+            is_bex = store_up in bex_list
+        else:
+            if bex_col and (bex_col in df.columns):
+                val = str(row[bex_col]).strip().lower() if not pd.isna(row[bex_col]) else ""
+                is_bex = val in ("1","yes","true","y","bex","ναι")
 
-        rtext = read_pdf_text_from_bytes(rbytes)
-        ptext = read_pdf_text_from_bytes(pbytes)
+        # KPIs from Excel
+        def val(col):
+            if not col or col == "(none)": return ""
+            v = row[col]
+            return "" if pd.isna(v) else v
 
-        cols[1].write(f"Review text chars: {len(rtext)}")
-        cols[2].write(f"Plan text chars: {len(ptext)}")
+        mobile_actual = val(col_mobile_act)
+        fixed_actual  = val(col_fixed_act)
+        mobile_target = val(col_mobile_tgt)
+        fixed_target  = val(col_fixed_tgt)
+        plan_month    = val(col_plan_month)
 
-        if len(rtext) < 20 or len(ptext) < 20:
-            cols[1].error("Ένα από τα PDF φαίνεται σαν εικόνα (δεν έχει κείμενο). Κάνε OCR (Recognize Text) και ξαναδοκίμασε.")
-            continue
+        # REVIEW BODY: PDF → κείμενο ή Manual fallback
+        review_text = ""
+        if store_up in pdf_map:
+            txt = read_pdf_text(pdf_map[store_up] and f"{store_up}_BR.pdf", pdf_map[store_up])
+            if txt and len(txt.strip()) >= 20:
+                # basic καθάρισμα
+                review_text = re.sub(r"\n{3,}", "\n\n", txt).strip()
+        if not review_text:
+            # αν δεν βρέθηκε/ήταν image, δείξε textarea για manual
+            with st.expander(f"✍️ Review body για {store_up} (PDF δεν έδωσε κείμενο)"):
+                review_text = st.text_area(f"{store_up} review body", "", key=f"rv_{store_up}")
 
-        rvals = parse_metrics(rtext, review_patterns)
-        pvals = parse_metrics(ptext, plan_patterns)
+        mapping = {
+            "title": f"Review September 2025 — Plan October 2025 — {store_up}",
+            "store": store_up,
+            "plan_month": plan_month,
+            "mobile_actual": mobile_actual,
+            "fixed_actual": fixed_actual,
+            "mobile_target": mobile_target,
+            "fixed_target": fixed_target,
+            "review_body": review_text or "",
+        }
 
-        with st.expander(f"Diagnostics — {code}", expanded=False):
-            st.write("Review extracted:", rvals)
-            st.write("Plan extracted:", pvals)
-
-        mapping = {}
-        mapping.update({f"review_{k}": v for k, v in rvals.items()})
-        mapping.update({f"plan_{k}": v for k, v in pvals.items()})
-        mapping["store"] = code
-        mapping["title"] = f"Review September 2025 — Plan October 2025 — {code}"
-
-        # choose template
-        is_bex = (code in bex_set)
-        tpl_bytes = tpl_bex_bytes if is_bex else tpl_nonbex_bytes
-        doc = Document(io.BytesIO(tpl_bytes))
+        doc = Document(io.BytesIO(tpl_bex_bytes if is_bex else tpl_nonbex_bytes))
         set_default_font(doc, "Aptos")
         replace_placeholders(doc, mapping)
 
-        out_name = f"{code}_ReviewSep_PlanOct.docx"
+        out_name = f"{store_up}_ReviewSep_PlanOct.docx"
         buf = io.BytesIO()
         doc.save(buf)
         z.writestr(out_name, buf.getvalue())
@@ -259,7 +237,7 @@ if run:
 
     z.close()
     if built == 0:
-        st.error("Δεν δημιουργήθηκε αρχείο. Έλεγξε filenames, ότι υπάρχουν και τα 2 PDFs ανά store και ότι δεν είναι σκαναρισμένες εικόνες.")
+        st.error("Δεν δημιουργήθηκε αρχείο. Έλεγξε STORE mapping & λίστα καταστημάτων.")
     else:
-        st.success(f"Ολοκληρώθηκε: δημιουργήθηκαν {built} αρχεία.")
-        st.download_button("⬇️ Κατέβασε όλα τα .docx (ZIP)", data=out_zip.getvalue(), file_name="reviews_plan_docs.zip")
+        st.success(f"Ολοκληρώθηκε: {built} αρχεία.")
+        st.download_button("⬇️ ZIP", data=out_zip.getvalue(), file_name="reviews_from_excel.zip")
