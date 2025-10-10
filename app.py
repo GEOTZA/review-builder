@@ -36,16 +36,15 @@ def replace_placeholders(doc: Document, mapping: Dict[str, Any]):
                         r.text = repl_text(r.text)
 
 def normkey(x: str) -> str:
-    """Κανονικοποίηση header: πεζά, χωρίς κενά/underscores/τελείες/παύλες."""
     return re.sub(r"[\s\-_\.]+", "", str(x).strip().lower())
 
 def pick(columns, *aliases):
-    """Βρες στήλη με βάση aliases (normalized)."""
     nmap = {normkey(c): c for c in columns}
+    # exact normalized
     for a in aliases:
         if normkey(a) in nmap:
             return nmap[normkey(a)]
-    # βρες με περιεχόμενο (contains)
+    # contains pattern
     for a in aliases:
         pat = re.compile(a, re.IGNORECASE)
         for c in columns:
@@ -76,8 +75,6 @@ sheet_name = st.text_input("Όνομα φύλλου (Sheet)", value="Sheet1")
 run = st.button("🔧 Generate")
 
 if run:
-    import time
-
     if not xls:
         st.error("Ανέβασε Excel πρώτα.")
         st.stop()
@@ -85,33 +82,29 @@ if run:
         st.error("Ανέβασε και τα δύο templates.")
         st.stop()
 
-    # 1) Διαγνωστικά αρχείων
-    st.info(
-        f"📄 Excel: {len(xls.getbuffer())/1024:.1f} KB | "
-        f"BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB"
-    )
+    st.info(f"📄 Excel size: {len(xls.getbuffer())/1024:.1f} KB | "
+            f"BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB")
 
-    # 2) Δείξε διαθέσιμα sheets & διάβασε με openpyxl
+    # Διαβάζουμε Excel με openpyxl και δείχνουμε διαθέσιμα sheets
     with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):
         try:
             xfile = pd.ExcelFile(xls, engine="openpyxl")
             st.write("📑 Sheets:", xfile.sheet_names)
             if sheet_name not in xfile.sheet_names:
-                st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
+                st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Επιλέξτε ένα από: {xfile.sheet_names}")
                 st.stop()
-            # αν έχεις τεράστιο Excel, διάβασε αρχικά λίγο για test:
-            df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
-            # εναλλακτικά test: df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl", nrows=2000)
+            df = pd.read_excel(xfile, sheet_name=sheet_name)
         except Exception as e:
             st.error(f"Δεν άνοιξε το Excel: {e}")
             st.stop()
 
     st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
     st.dataframe(df.head(10))
+
     cols = list(df.columns)
 
-    # ---- AUTO-MAP με βάση το screenshot σου ----
-    col_store       = pick(cols, "Shop Code", "Shop_Code", "ShopCode", "STORE", "Κατάστημα", r"shop.?code")
+    # ---- AUTO-MAP βασισμένο στο δικό σου Excel ----
+    col_store       = pick(cols, "Shop Code", "Shop_Code", "ShopCode", "STORE", "Κατάστημα", r"shop.?code")  # χωρίς underscore επίσης
     col_bex         = pick(cols, "BEX store", "BEX", r"bex.?store")
     col_mob_act     = pick(cols, "mobile actual", r"mobile.*actual")
     col_mob_tgt     = pick(cols, "mobile target", r"mobile.*target", "mobile plan")
@@ -121,8 +114,7 @@ if run:
     col_pend_fix    = pick(cols, "TOTAL PENDING FIXED", r"pending.*fixed")
     col_plan_vs     = pick(cols, "plan vs target", r"plan.*vs.*target")
 
-    # προβολή που βρήκαμε
-     with st.expander("Χαρτογράφηση (auto)"):
+    with st.expander("Χαρτογράφηση (auto)"):
         st.write({
             "STORE": col_store, "BEX": col_bex,
             "mobile_actual": col_mob_act, "mobile_target": col_mob_tgt,
@@ -131,22 +123,25 @@ if run:
             "plan_vs_target": col_plan_vs
         })
 
-   # 4) Templates σε μνήμη
+    if not col_store:
+        st.error("Δεν βρέθηκε στήλη STORE (π.χ. 'Shop Code').")
+        st.stop()
+
     tpl_bex_bytes = tpl_bex.read()
     tpl_nonbex_bytes = tpl_nonbex.read()
 
-    # 5) Δημιουργία αρχείων με progress
     out_zip = io.BytesIO()
     z = zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED)
     built = 0
 
-    pbar = st.progress(0, text="Δημιουργία εγγράφων...")
-    total = max(1, len(df))
-
     def cell(row, col):
         if not col: return ""
         v = row[col]
-        return "" if pd.isna(v) else v
+        if pd.isna(v): return ""
+        return v
+
+    pbar = st.progress(0, text="Δημιουργία εγγράφων...")
+    total = max(1, len(df))
 
     for i, (_, row) in enumerate(df.iterrows(), start=1):
         try:
@@ -156,7 +151,6 @@ if run:
                 continue
             store_up = store.upper()
 
-            # BEX flag
             if bex_mode == "Λίστα (comma-separated)":
                 is_bex = store_up in bex_list
             else:
