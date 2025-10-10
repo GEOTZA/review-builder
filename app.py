@@ -36,9 +36,11 @@ def replace_placeholders(doc: Document, mapping: Dict[str, Any]):
                         r.text = repl_text(r.text)
 
 def normkey(x: str) -> str:
+    """Πεζά + αφαίρεση κενών/underscores/παυλών/τελειών, για robust matching."""
     return re.sub(r"[\s\-_\.]+", "", str(x).strip().lower())
 
 def pick(columns, *aliases):
+    """Βρες στήλη με βάση aliases (normalized). Πρώτα exact normalized, μετά contains regex."""
     nmap = {normkey(c): c for c in columns}
     # exact normalized
     for a in aliases:
@@ -51,6 +53,12 @@ def pick(columns, *aliases):
             if re.search(pat, str(c)):
                 return c
     return None
+
+def cell(row, col):
+    if not col:
+        return ""
+    v = row[col]
+    return "" if pd.isna(v) else v
 
 # ---------- UI ----------
 st.title("📊 Excel → 📄 Review/Plan Generator (BEX & Non-BEX)")
@@ -82,8 +90,10 @@ if run:
         st.error("Ανέβασε και τα δύο templates.")
         st.stop()
 
-    st.info(f"📄 Excel size: {len(xls.getbuffer())/1024:.1f} KB | "
-            f"BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB")
+    st.info(
+        f"📄 Excel: {len(xls.getbuffer())/1024:.1f} KB | "
+        f"BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB"
+    )
 
     # Διαβάζουμε Excel με openpyxl και δείχνουμε διαθέσιμα sheets
     with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):
@@ -103,8 +113,8 @@ if run:
 
     cols = list(df.columns)
 
-    # ---- AUTO-MAP βασισμένο στο δικό σου Excel ----
-    col_store       = pick(cols, "Shop Code", "Shop_Code", "ShopCode", "STORE", "Κατάστημα", r"shop.?code")  # χωρίς underscore επίσης
+    # ---- AUTO-MAP βασισμένο στο Excel σου ----
+    col_store       = pick(cols, "Shop Code", "Shop_Code", "ShopCode", "Shop code", "STORE", "Κατάστημα", r"shop.?code")
     col_bex         = pick(cols, "BEX store", "BEX", r"bex.?store")
     col_mob_act     = pick(cols, "mobile actual", r"mobile.*actual")
     col_mob_tgt     = pick(cols, "mobile target", r"mobile.*target", "mobile plan")
@@ -124,7 +134,7 @@ if run:
         })
 
     if not col_store:
-        st.error("Δεν βρέθηκε στήλη STORE (π.χ. 'Shop Code').")
+        st.error("Δεν βρέθηκε στήλη STORE (π.χ. 'Shop Code'). Διόρθωσε την κεφαλίδα ή πρόσθεσε alias.")
         st.stop()
 
     tpl_bex_bytes = tpl_bex.read()
@@ -133,12 +143,6 @@ if run:
     out_zip = io.BytesIO()
     z = zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED)
     built = 0
-
-    def cell(row, col):
-        if not col: return ""
-        v = row[col]
-        if pd.isna(v): return ""
-        return v
 
     pbar = st.progress(0, text="Δημιουργία εγγράφων...")
     total = max(1, len(df))
@@ -151,11 +155,12 @@ if run:
                 continue
             store_up = store.upper()
 
+            # BEX flag
             if bex_mode == "Λίστα (comma-separated)":
                 is_bex = store_up in bex_list
             else:
                 bex_val = str(cell(row, col_bex)).strip().lower()
-                is_bex = bex_val in ("yes","y","1","true","ναι")
+                is_bex = bex_val in ("yes", "y", "1", "true", "ναι")
 
             mapping = {
                 "title": f"Review September 2025 — Plan October 2025 — {store_up}",
@@ -180,6 +185,7 @@ if run:
             z.writestr(out_name, buf.getvalue())
             built += 1
             pbar.progress(min(i/total, 1.0), text=f"Φτιάχνω: {out_name} ({i}/{total})")
+
         except Exception as e:
             st.warning(f"⚠️ Σφάλμα στη γραμμή {i}: {e}")
             pbar.progress(min(i/total, 1.0), text=f"Συνεχίζω… ({i}/{total})")
