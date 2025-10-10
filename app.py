@@ -101,7 +101,7 @@ if run:
     #1) Διαβάζουμε Excel με openpyxl και δείχνουμε διαθέσιμα sheets
     #2) Δείξε διαθέσιμα sheets & διάβασε με openpyxl
 with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):
-    try:
+try:
         xfile = pd.ExcelFile(xls, engine="openpyxl")
         st.write("📑 Sheets:", xfile.sheet_names)
         if sheet_name not in xfile.sheet_names:
