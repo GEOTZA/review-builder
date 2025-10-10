@@ -75,9 +75,7 @@ sheet_name = st.text_input("Όνομα φύλλου (Sheet)", value="Sheet1")
 
 run = st.button("🔧 Generate")
 
-if run:
-    import time
-
+f run:
     if not xls:
         st.error("Ανέβασε Excel πρώτα.")
         st.stop()
@@ -85,18 +83,26 @@ if run:
         st.error("Ανέβασε και τα δύο templates.")
         st.stop()
 
-    st.info(f"📄 Excel size: {len(xls.getbuffer())/1024:.1f} KB | BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB")
+    # Διαγνωστικά αρχείων
+    st.info(f"📄 Excel size: {len(xls.getbuffer())/1024:.1f} KB | "
+            f"BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB")
 
-    # Δείξε spinner για την ανάγνωση Excel
-    with st.spinner("Ανάγνωση Excel..."):
+    # >>> ΝΕΟ: δείξε διαθέσιμα sheets και διάβασε με openpyxl
+    with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):
         try:
-            df = pd.read_excel(xls, sheet_name=sheet_name, engine="openpyxl")
+            xfile = pd.ExcelFile(xls, engine="openpyxl")
+            st.write("📑 Διαθέσιμα sheets:", xfile.sheet_names)
+            if sheet_name not in xfile.sheet_names:
+                st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
+                st.stop()
+            df = pd.read_excel(xfile, sheet_name=sheet_name)
         except Exception as e:
-            st.error(f"Δεν άνοιξε το Excel (sheet='{sheet_name}'): {e}")
+            st.error(f"Δεν άνοιξε το Excel: {e}")
             st.stop()
 
-    st.success(f"OK: βρέθηκαν {len(df)} γραμμές και {len(df.columns)} στήλες.")
+    st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
     st.dataframe(df.head(5))
+
 
     cols = list(df.columns)
 
