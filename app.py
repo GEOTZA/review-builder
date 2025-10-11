@@ -9,7 +9,7 @@ import streamlit as st
 from docx import Document
 from docx.oxml.ns import qn
 
-# ───────────────── helpers ─────────────────
+# ───────────────── helpers  ─────────────────
 def set_default_font(doc: Document, font_name: str = "Aptos") -> None:
     for style in doc.styles:
         if hasattr(style, "font"):
