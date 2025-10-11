@@ -85,9 +85,8 @@ sheet_name = st.text_input("Όνομα φύλλου (Sheet)", value="Sheet1")
 
 run = st.button("🔧 Generate")
 
-run = st.button("🔧 Generate")
-
 if run:
+    # 1. Βήμα: Αρχικοί έλεγχοι αρχείων
     if not xls:
         st.error("Ανέβασε Excel πρώτα.")
         st.stop()
@@ -100,25 +99,28 @@ if run:
         f"BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB"
     )
 
-    # 2) Δείξε διαθέσιμα sheets & διάβασε με openpyxl
-    with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):
-        try:
-            xfile = pd.ExcelFile(xls, engine="openpyxl")
+    # 2. Βήμα: Ανάγνωση Excel και έλεγχος sheets
+    with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):                                                                  
+      try:  xfile = pd.ExcelFile(xls, engine="openpyxl")
             st.write("📑 Sheets:", xfile.sheet_names)
             if sheet_name not in xfile.sheet_names:
                 st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
                 st.stop()
+            # Διαβάζουμε όλο το DataFrame
             df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
         except Exception as e:
             st.error(f"Δεν άνοιξε το Excel: {e}")
             st.stop()
 
+    # --- Ο ΚΩΔΙΚΑΣ ΕΔΩ ΕΚΤΕΛΕΙΤΑΙ ΜΟΝΟ ΑΝ ΤΟ df ΔΙΑΒΑΣΤΗΚΕ ΕΠΙΤΥΧΩΣ ---
+
     st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
-    st.dataframe(df.head(10))
+    if debug_mode:
+        st.dataframe(df.head(10))
 
     cols = list(df.columns)
 
-    # ---- AUTO-MAP ----
+    # ---- AUTO-MAP βασισμένο στο Excel σου ----
     col_store       = pick(cols, "Shop Code", "Shop_Code", "ShopCode", "Shop code", "STORE", "Κατάστημα", r"shop.?code")
     col_bex         = pick(cols, "BEX store", "BEX", r"bex.?store")
     col_mob_act     = pick(cols, "mobile actual", r"mobile.*actual")
@@ -131,15 +133,19 @@ if run:
 
     with st.expander("Χαρτογράφηση (auto)"):
         st.write({
-            "STORE": col_store, "BEX": col_bex,
-            "mobile_actual": col_mob_act, "mobile_target": col_mob_tgt,
-            "fixed_target": col_fix_tgt, "fixed_actual": col_fix_act,
-            "pending_mobile": col_pend_mob, "pending_fixed": col_pend_fix,
+            "STORE": col_store, 
+            "BEX": col_bex,
+            "mobile_actual": col_mob_act, 
+            "mobile_target": col_mob_tgt,
+            "fixed_target": col_fix_tgt,
+            "fixed_actual": col_fix_act,
+            "pending_mobile": col_pend_mob, 
+            "pending_fixed": col_pend_fix,
             "plan_vs_target": col_plan_vs
         })
 
     if not col_store:
-        st.error("Δεν βρέθηκε στήλη STORE (π.χ. 'Shop Code').")
+        st.error("Δεν βρέθηκε στήλη STORE (π.χ. 'Shop Code'). Διόρθωσε την κεφαλίδα ή πρόσθεσε alias.")
         st.stop()
 
     tpl_bex_bytes = tpl_bex.read()
@@ -147,25 +153,28 @@ if run:
 
     out_zip = io.BytesIO()
     z = zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED)
-    built = 0
+    built = 0 # Η μεταβλητή για τον μετρητή των αρχείων.
 
     pbar = st.progress(0, text="Δημιουργία εγγράφων...")
-    total = max(1, len(df))
-
-    def cell(row, col):
-        if not col:
-            return ""
-        v = row[col]
-        return "" if pd.isna(v) else v
-
-    for i, (_, row) in enumerate(df.iterrows(), start=1):
+    
+    max_rows = 50 if test_mode else len(df)
+    
+    for i, row_tuple in enumerate(df.itertuples(index=False), start=1):
+        if i > max_rows:
+            if debug_mode:
+                st.info(f"🧪 Test mode: σταμάτησα στις {max_rows} γραμμές.")
+            break
         try:
+            # Μετατροπή του tuple σε Series για να δουλέψει σωστά το cell(...)
+            row = pd.Series(row_tuple, index=df.columns) 
             store = str(cell(row, col_store)).strip()
+            
             if not store:
-                pbar.progress(min(i/total, 1.0), text=f"Παράλειψη γραμμής {i} (κενό store)")
+                # Χρησιμοποιούμε max_rows για τον υπολογισμό της προόδου
+                pbar.progress(min(i/max_rows, 1.0), text=f"Παράλειψη γραμμής {i} (κενό store)")
                 continue
-            store_up = store.upper()
 
+            store_up = store.upper()
             if bex_mode == "Λίστα (comma-separated)":
                 is_bex = store_up in bex_list
             else:
@@ -193,12 +202,17 @@ if run:
             buf = io.BytesIO()
             doc.save(buf)
             z.writestr(out_name, buf.getvalue())
-            built += 1
-            pbar.progress(min(i/total, 1.0), text=f"Φτιάχνω: {out_name} ({i}/{total})")
+            
+            # --- Αυξάνουμε τον μετρητή επιτυχημένων αρχείων ---
+            built += 1 
+
+            pbar.progress(min(i/max_rows, 1.0), text=f"Φτιάχνω: {out_name} ({i}/{max_rows})")
         except Exception as e:
             st.warning(f"⚠️ Σφάλμα στη γραμμή {i}: {e}")
-            pbar.progress(min(i/total, 1.0), text=f"Συνεχίζω… ({i}/{total})")
+            if debug_mode:
+                st.exception(e)
 
+    # --- ΤΟ ΤΕΛΟΣ ΤΟΥ if run: BLOCK ---
     z.close()
     if built == 0:
         st.error("Δεν δημιουργήθηκε αρχείο. Έλεγξε STORE mapping & templates.")
