@@ -1,4 +1,3 @@
-# flake8: noqa
 import streamlit as st
 import io, zipfile, re
 import pandas as pd
@@ -86,48 +85,8 @@ def read_data(xls, file_type, sheet_name):
 # -----------------------------------------------
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ---------- UI ----------
-st.title("📊 Excel/CSV → 📄 Review/Plan Generator (BEX & Non-BEX)")
-debug_mode = st.sidebar.toggle("🛠 Debug mode", value=True)
-test_mode  = st.sidebar.toggle("🧪 Test mode (limit rows=50)", value=True)
-
-with st.sidebar:
-    st.header("⚙️ BEX")
-    bex_mode = st.radio("Πηγή BEX", ["Στήλη στο Excel", "Λίστα (comma-separated)"], index=0)
-    bex_list = set()
-    if bex_mode == "Λίστα (comma-separated)":
-        bex_input = st.text_area("BEX stores", "ESC01,FKM01,LND01,DRZ01,PKK01")
-        bex_list = set(s.strip().upper() for s in bex_input.split(",") if s.strip())
-
-    st.subheader("📄 Templates (.docx)")
-    tpl_bex = st.file_uploader("BEX template", type=["docx"])
-    tpl_nonbex = st.file_uploader("Non-BEX template", type=["docx"])
-    st.caption("Placeholders: [[title]], [[store]], [[mobile_actual]], [[mobile_target]], [[fixed_actual]], [[fixed_target]], [[pending_mobile]], [[pending_fixed]], [[plan_vs_target]]")
-
-st.markdown("### 1) Ανέβασε Excel/CSV")
-xls = st.file_uploader("Excel/CSV", type=["xlsx", "csv"])
-sheet_name = st.text_input("Όνομα φύλλου (Sheet - μόνο για Excel)", value="Sheet1")
-
-run = st.button("🔧 Generate")
-
-if run:
+# ---------- MAIN APP FUNCTION (formerly the 'if run:' block) ----------
+def main_app_logic(xls, sheet_name, bex_mode, bex_list, tpl_bex, tpl_nonbex, debug_mode, test_mode):
     # 1. Βήμα: Αρχικοί έλεγχοι αρχείων
     if not xls:
         st.error("Ανέβασε αρχείο Excel ή CSV πρώτα.")
@@ -217,7 +176,6 @@ if run:
                 is_bex = store_up in bex_list
             else:
                 # Χρησιμοποιούμε col_bex μόνο αν το αρχείο είναι Excel 
-                # Για CSV, αν δεν υπάρχει col_bex, θεωρούμε ότι δεν είναι BEX (ή το αντίθετο αν το default άλλαζε)
                 bex_val = str(cell(row, col_bex)).strip().lower() if col_bex else "no"
                 is_bex = bex_val in ("yes", "y", "1", "true", "ναι")
 
@@ -252,8 +210,9 @@ if run:
             if debug_mode:
                 st.exception(e)
 
-    # --- ΤΟ ΤΕΛΟΣ ΤΟΥ if run: BLOCK ---
     z.close()
+    pbar.empty() # Καθαρίζουμε την μπάρα προόδου
+
     if built == 0:
         st.error("Δεν δημιουργήθηκε αρχείο. Έλεγξε STORE mapping & templates.")
     else:
@@ -261,4 +220,32 @@ if run:
         st.download_button("⬇️ Κατέβασε ZIP", data=out_zip.getvalue(), file_name="reviews_from_excel.zip")
 
 
+# ---------- UI SETUP AND EXECUTION ----------
 
+# UI elements for configuration
+st.title("📊 Excel/CSV → 📄 Review/Plan Generator (BEX & Non-BEX)")
+debug_mode = st.sidebar.toggle("🛠 Debug mode", value=True)
+test_mode  = st.sidebar.toggle("🧪 Test mode (limit rows=50)", value=True)
+
+with st.sidebar:
+    st.header("⚙️ BEX")
+    bex_mode = st.radio("Πηγή BEX", ["Στήλη στο Excel", "Λίστα (comma-separated)"], index=0)
+    bex_list = set()
+    if bex_mode == "Λίστα (comma-separated)":
+        bex_input = st.text_area("BEX stores", "ESC01,FKM01,LND01,DRZ01,PKK01")
+        bex_list = set(s.strip().upper() for s in bex_input.split(",") if s.strip())
+
+    st.subheader("📄 Templates (.docx)")
+    tpl_bex = st.file_uploader("BEX template", type=["docx"])
+    tpl_nonbex = st.file_uploader("Non-BEX template", type=["docx"])
+    st.caption("Placeholders: [[title]], [[store]], [[mobile_actual]], [[mobile_target]], [[fixed_actual]], [[fixed_target]], [[pending_mobile]], [[pending_fixed]], [[plan_vs_target]]")
+
+st.markdown("### 1) Ανέβασε Excel/CSV")
+xls = st.file_uploader("Excel/CSV", type=["xlsx", "csv"])
+sheet_name = st.text_input("Όνομα φύλλου (Sheet - μόνο για Excel)", value="Sheet1")
+
+run = st.button("🔧 Generate")
+
+# Execution trigger
+if run:
+    main_app_logic(xls, sheet_name, bex_mode, bex_list, tpl_bex, tpl_nonbex, debug_mode, test_mode)
