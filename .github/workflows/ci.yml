@@ -25,7 +25,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
@@ -46,9 +46,10 @@ compile(src, "app.py", "exec")
 print("✅ Python compile OK")
 PY
 
-      - name: Run flake8 (lenient for now)
+      - name: Run flake8 (lenient mode)
         run: |
           python -m pip install flake8
+          echo "Running flake8..."
           flake8 app.py --extend-ignore=E999 || true
 
       - name: Run pytest (only if tests exist)
