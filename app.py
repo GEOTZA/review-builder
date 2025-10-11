@@ -128,20 +128,22 @@ def main_app_logic(xls, sheet_name, bex_mode, bex_list, tpl_bex, tpl_nonbex, deb
     col_pend_fix    = pick(cols, "TOTAL PENDING FIXED", r"pending.*fixed")
     col_plan_vs     = pick(cols, "plan vs target", r"plan.*vs.*target")
 
-    # Καθαρό block χαρτογράφησης για αποφυγή IndentationError
-    with st.expander("Χαρτογράφηση (auto)"):
-        st.write({
-            "STORE": col_store, 
-            "BEX": col_bex,
-            "mobile_actual": col_mob_act, 
-            "mobile_target": col_mob_tgt,
-            "fixed_target": col_fix_tgt,
-            "fixed_actual": col_fix_act,
-            "pending_mobile": col_pend_mob, 
-            "pending_fixed": col_pend_fix,
-            "plan_vs_target": col_plan_vs
-        })
-    # Τέλος καθαρού block
+    # Χαρτογράφηση (Display Auto-Mapping) - Απλοποιημένη Δομή για αποφυγή CI/Linter IndentationError
+    st.markdown("---")
+    st.info("Εντοπισμένη Χαρτογράφηση Στηλών (Auto-Mapping)")
+    st.write({
+        "STORE": col_store, 
+        "BEX": col_bex,
+        "mobile_actual": col_mob_act, 
+        "mobile_target": col_mob_tgt,
+        "fixed_target": col_fix_tgt,
+        "fixed_actual": col_fix_act,
+        "pending_mobile": col_pend_mob, 
+        "pending_fixed": col_pend_fix,
+        "plan_vs_target": col_plan_vs
+    })
+    st.markdown("---")
+
 
     if not col_store:
         st.error("Δεν βρέθηκε στήλη STORE (π.χ. 'Shop Code'). Διόρθωσε την κεφαλίδα ή πρόσθεσε alias.")
