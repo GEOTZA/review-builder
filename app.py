@@ -86,6 +86,21 @@ def read_data(xls, file_type, sheet_name):
 # -----------------------------------------------
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # ---------- UI ----------
 st.title("📊 Excel/CSV → 📄 Review/Plan Generator (BEX & Non-BEX)")
 debug_mode = st.sidebar.toggle("🛠 Debug mode", value=True)
@@ -242,4 +257,5 @@ if run:
     else:
         st.success(f"Έτοιμα {built} αρχεία.")
         st.download_button("⬇️ Κατέβασε ZIP", data=out_zip.getvalue(), file_name="reviews_from_excel.zip")
+
 
