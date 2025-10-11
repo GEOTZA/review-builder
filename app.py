@@ -62,7 +62,7 @@ def cell(row, col):
     return "" if pd.isna(v) else v
 
 # ---------- UI ----------
-st.title("📊 Excel → 📄 Review/Plan Generator (BEX & Non-BEX)")
+st.title("📊 Excel/CSV → 📄 Review/Plan Generator (BEX & Non-BEX)")
 debug_mode = st.sidebar.toggle("🛠 Debug mode", value=True)
 test_mode  = st.sidebar.toggle("🧪 Test mode (limit rows=50)", value=True)
 
@@ -79,40 +79,58 @@ with st.sidebar:
     tpl_nonbex = st.file_uploader("Non-BEX template", type=["docx"])
     st.caption("Placeholders: [[title]], [[store]], [[mobile_actual]], [[mobile_target]], [[fixed_actual]], [[fixed_target]], [[pending_mobile]], [[pending_fixed]], [[plan_vs_target]]")
 
-st.markdown("### 1) Ανέβασε Excel")
-xls = st.file_uploader("Excel (xlsx)", type=["xlsx"])
-sheet_name = st.text_input("Όνομα φύλλου (Sheet)", value="Sheet1")
+st.markdown("### 1) Ανέβασε Excel/CSV")
+xls = st.file_uploader("Excel/CSV", type=["xlsx", "csv"])
+sheet_name = st.text_input("Όνομα φύλλου (Sheet - μόνο για Excel)", value="Sheet1")
 
 run = st.button("🔧 Generate")
 
 if run:
     # 1. Βήμα: Αρχικοί έλεγχοι αρχείων
     if not xls:
-        st.error("Ανέβασε Excel πρώτα.")
+        st.error("Ανέβασε αρχείο Excel ή CSV πρώτα.")
         st.stop()
     if not tpl_bex or not tpl_nonbex:
         st.error("Ανέβασε και τα δύο templates.")
         st.stop()
 
     st.info(
-        f"📄 Excel: {len(xls.getbuffer())/1024:.1f} KB | "
+        f"📄 Δεδομένα: {len(xls.getbuffer())/1024:.1f} KB | "
         f"BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB"
     )
+    
+    file_type = xls.name.split('.')[-1].lower()
+    df = None # Αρχικοποίηση
 
-    # 2. Βήμα: Ανάγνωση Excel και έλεγχος sheets
-    with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):                                                                  
-      try:  xfile = pd.ExcelFile(xls, engine="openpyxl")
-            st.write("📑 Sheets:", xfile.sheet_names)
-            if sheet_name not in xfile.sheet_names:
-                st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
+    # 2. Βήμα: Ανάγνωση αρχείου και έλεγχος sheets
+    with st.spinner("Ανάγνωση αρχείου & έλεγχος..."):
+        try:
+            if file_type == 'csv':
+                # Ανάγνωση CSV
+                df = pd.read_csv(xls)
+                st.write("📑 Sheets:", ["CSV Data"])
+            elif file_type == 'xlsx':
+                # Ανάγνωση Excel
+                xfile = pd.ExcelFile(xls, engine="openpyxl")
+                st.write("📑 Sheets:", xfile.sheet_names)
+                if sheet_name not in xfile.sheet_names:
+                    st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
+                    st.stop()
+                df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
+            else:
+                st.error("Μη υποστηριζόμενος τύπος αρχείου.")
                 st.stop()
-            # Διαβάζουμε όλο το DataFrame
-            df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
-        except Exception as e:
-            st.error(f"Δεν άνοιξε το Excel: {e}")
-            st.stop()
 
+        except Exception as e:
+            st.error(f"Δεν άνοιξε το αρχείο: {e}")
+            st.stop()
+            
     # --- Ο ΚΩΔΙΚΑΣ ΕΔΩ ΕΚΤΕΛΕΙΤΑΙ ΜΟΝΟ ΑΝ ΤΟ df ΔΙΑΒΑΣΤΗΚΕ ΕΠΙΤΥΧΩΣ ---
+    
+    if df is None:
+        st.error("Αδυναμία φόρτωσης δεδομένων.")
+        st.stop()
+
 
     st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
     if debug_mode:
@@ -178,7 +196,9 @@ if run:
             if bex_mode == "Λίστα (comma-separated)":
                 is_bex = store_up in bex_list
             else:
-                bex_val = str(cell(row, col_bex)).strip().lower()
+                # Χρησιμοποιούμε col_bex μόνο αν το αρχείο είναι Excel 
+                # Για CSV, αν δεν υπάρχει col_bex, θεωρούμε ότι δεν είναι BEX (ή το αντίθετο αν το default άλλαζε)
+                bex_val = str(cell(row, col_bex)).strip().lower() if col_bex else "no"
                 is_bex = bex_val in ("yes", "y", "1", "true", "ναι")
 
             mapping = {
