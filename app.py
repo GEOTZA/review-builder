@@ -1,17 +1,24 @@
-# flake8: noqa
+# app.py
+# Streamlit: Excel/CSV -> (BEX / Non-BEX) Review-Plan .docx (ZIP)
+# Author: GEOTZA + Nova helper
+
 import io
 import re
 import zipfile
 from typing import Any, Dict
-import streamlit as st
-st.write("✅ App loaded successfully")
+
 import pandas as pd
 import streamlit as st
 from docx import Document
 from docx.oxml.ns import qn
 
-# ───────────────── helpers  ─────────────────
+# ───────────────────────────── UI CONFIG ─────────────────────────────
+st.set_page_config(page_title="Excel → Review/Plan Generator", layout="wide")
+st.title("📊 Excel/CSV → 📄 Review/Plan Generator (BEX & Non-BEX)")
+
+# ───────────────────────────── HELPERS ─────────────────────────────
 def set_default_font(doc: Document, font_name: str = "Aptos") -> None:
+    """Ορίζει προεπιλεγμένη γραμματοσειρά σε όλα τα styles (και eastAsia)."""
     for style in doc.styles:
         if hasattr(style, "font"):
             try:
@@ -22,10 +29,12 @@ def set_default_font(doc: Document, font_name: str = "Aptos") -> None:
                 pass
 
 def replace_placeholders(doc: Document, mapping: Dict[str, Any]) -> None:
+    """Αντικαθιστά [[placeholders]] σε paragraphs & tables."""
     pattern = re.compile(r"\[\[([A-Za-z0-9_]+)\]\]")
 
     def subfun(s: str) -> str:
-        return pattern.sub(lambda m: "" if mapping.get(m.group(1)) is None else str(mapping.get(m.group(1), "")), s)
+        key_to_val = lambda m: "" if mapping.get(m.group(1)) is None else str(mapping.get(m.group(1), ""))
+        return pattern.sub(key_to_val, s)
 
     for p in doc.paragraphs:
         for r in p.runs:
@@ -38,9 +47,11 @@ def replace_placeholders(doc: Document, mapping: Dict[str, Any]) -> None:
                         r.text = subfun(r.text)
 
 def normkey(x: str) -> str:
+    """lower + αφαίρεση κενών/-,_,. για robust ταύτιση headers."""
     return re.sub(r"[\s\-_\.]+", "", str(x).strip().lower())
 
 def pick(columns, *aliases) -> str:
+    """Βρες στήλη με βάση aliases (πρώτα exact normalized, μετά regex contains)."""
     nmap = {normkey(c): c for c in columns}
     for a in aliases:
         if normkey(a) in nmap:
@@ -58,13 +69,14 @@ def cell(row: pd.Series, col: str):
     v = row[col]
     return "" if pd.isna(v) else v
 
-def read_data(xls, sheet_name: str):
-    """Δέχεται .xlsx ή .csv. Επιστρέφει DataFrame ή None."""
+def read_data(xls, sheet_name: str) -> pd.DataFrame | None:
+    """Δέχεται .xlsx ή .csv (auto-detect από το όνομα). Επιστρέφει DataFrame ή None."""
     try:
         fname = getattr(xls, "name", "")
         if fname.lower().endswith(".csv"):
             st.write("📑 Sheets:", ["CSV Data"])
             return pd.read_csv(xls)
+        # default: xlsx
         xfile = pd.ExcelFile(xls, engine="openpyxl")
         st.write("📑 Sheets:", xfile.sheet_names)
         if sheet_name not in xfile.sheet_names:
@@ -75,11 +87,7 @@ def read_data(xls, sheet_name: str):
         st.error(f"Δεν άνοιξε το αρχείο: {e}")
         return None
 
-# ───────────────── UI ─────────────────
-st.set_page_config(page_title="Excel → Review/Plan Generator", layout="wide")
-st.title("📊 Excel/CSV → 📄 Review/Plan Generator (BEX & Non-BEX)")
-
-# --- Sidebar ΧΩΡΙΣ 'with' ---
+# ───────────────────────────── SIDEBAR ─────────────────────────────
 debug_mode = st.sidebar.toggle("🛠 Debug mode", value=True)
 test_mode  = st.sidebar.toggle("🧪 Test mode (limit rows=50)", value=True)
 
@@ -91,20 +99,23 @@ if bex_mode == "Λίστα (comma-separated)":
     bex_list = set(s.strip().upper() for s in bex_input.split(",") if s.strip())
 
 st.sidebar.subheader("📄 Templates (.docx)")
-tpl_bex = st.sidebar.file_uploader("BEX template", type=["docx"])
+tpl_bex    = st.sidebar.file_uploader("BEX template", type=["docx"])
 tpl_nonbex = st.sidebar.file_uploader("Non-BEX template", type=["docx"])
 st.sidebar.caption(
     "Placeholders: [[title]], [[store]], [[mobile_actual]], [[mobile_target]], "
     "[[fixed_actual]], [[fixed_target]], [[pending_mobile]], [[pending_fixed]], [[plan_vs_target]]"
 )
 
+# ───────────────────────────── MAIN INPUTS ─────────────────────────────
 st.markdown("### 1) Ανέβασε Excel/CSV")
 xls = st.file_uploader("Excel/CSV", type=["xlsx", "csv"])
 sheet_name = st.text_input("Όνομα φύλλου (Sheet - μόνο για Excel)", value="Sheet1")
+
 run = st.button("🔧 Generate")
 
-# ───────────────── MAIN ─────────────────
+# ───────────────────────────── MAIN ─────────────────────────────
 if run:
+    # Αρχικοί έλεγχοι
     if not xls:
         st.error("Ανέβασε αρχείο Excel ή CSV πρώτα.")
         st.stop()
@@ -117,6 +128,7 @@ if run:
         f"BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB"
     )
 
+    # Διαβάζουμε δεδομένα
     df = read_data(xls, sheet_name)
     if df is None or df.empty:
         st.error("Δεν βρέθηκαν δεδομένα στο αρχείο.")
@@ -128,32 +140,35 @@ if run:
 
     cols = list(df.columns)
 
-    col_store       = pick(cols, "Shop Code", "Shop_Code", "ShopCode", "Shop code", "STORE", "Κατάστημα", r"shop.?code")
-    col_bex         = pick(cols, "BEX store", "BEX", r"bex.?store")
-    col_mob_act     = pick(cols, "mobile actual", r"mobile.*actual")
-    col_mob_tgt     = pick(cols, "mobile target", r"mobile.*target", "mobile plan")
-    col_fix_tgt     = pick(cols, "target fixed", r"fixed.*target", "fixed plan total", "fixed plan")
-    col_fix_act     = pick(cols, "total fixed", r"(total|sum).?fixed.*actual", "fixed actual")
-    col_pend_mob    = pick(cols, "TOTAL PENDING MOBILE", r"pending.*mobile")
-    col_pend_fix    = pick(cols, "TOTAL PENDING FIXED", r"pending.*fixed")
-    col_plan_vs     = pick(cols, "plan vs target", r"plan.*vs.*target")
+    # Auto-map βασισμένο στα headers
+    col_store    = pick(cols, "Shop Code", "Shop_Code", "ShopCode", "Shop code", "STORE", "Κατάστημα", r"shop.?code")
+    col_bex      = pick(cols, "BEX store", "BEX", r"bex.?store")
+    col_mob_act  = pick(cols, "mobile actual", r"mobile.*actual")
+    col_mob_tgt  = pick(cols, "mobile target", r"mobile.*target", "mobile plan")
+    col_fix_tgt  = pick(cols, "target fixed", r"fixed.*target", "fixed plan total", "fixed plan")
+    col_fix_act  = pick(cols, "total fixed", r"(total|sum).?fixed.*actual", "fixed actual")
+    col_pend_mob = pick(cols, "TOTAL PENDING MOBILE", r"pending.*mobile")
+    col_pend_fix = pick(cols, "TOTAL PENDING FIXED", r"pending.*fixed")
+    col_plan_vs  = pick(cols, "plan vs target", r"plan.*vs.*target")
 
-  with st.expander("Χαρτογράφηση (auto)"):
-    st.write({
-        "STORE": col_store, "BEX": col_bex,
-        "mobile_actual": col_mob_act, "mobile_target": col_mob_tgt,
-        "fixed_target": col_fix_tgt, "fixed_actual": col_fix_act,
-        "pending_mobile": col_pend_mob, "pending_fixed": col_pend_fix,
-        "plan_vs_target": col_plan_vs
-    })
+    # Εμφάνιση mapping
+    with st.expander("Χαρτογράφηση (auto)"):
+        st.write({
+            "STORE": col_store, "BEX": col_bex,
+            "mobile_actual": col_mob_act, "mobile_target": col_mob_tgt,
+            "fixed_target": col_fix_tgt, "fixed_actual": col_fix_act,
+            "pending_mobile": col_pend_mob, "pending_fixed": col_pend_fix,
+            "plan_vs_target": col_plan_vs
+        })
 
     if not col_store:
         st.error("Δεν βρέθηκε στήλη STORE (π.χ. 'Shop Code'). Διόρθωσε την κεφαλίδα ή πρόσθεσε alias.")
         st.stop()
 
-    tpl_bex_bytes = tpl_bex.read()
+    tpl_bex_bytes    = tpl_bex.read()
     tpl_nonbex_bytes = tpl_nonbex.read()
 
+    # Out ZIP
     out_zip = io.BytesIO()
     zf = zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED)
     built = 0
@@ -169,10 +184,12 @@ if run:
         try:
             store = str(cell(row, col_store)).strip()
             if not store:
-                pbar.progress(min(i/total, 1.0), text=f"Παράλειψη γραμμής {i} (κενό store)")
+                pbar.progress(min(i / (total or 1), 1.0), text=f"Παράλειψη γραμμής {i} (κενό store)")
                 continue
 
             store_up = store.upper()
+
+            # BEX flag
             if bex_mode == "Λίστα (comma-separated)":
                 is_bex = store_up in bex_list
             else:
@@ -188,4 +205,31 @@ if run:
                 "fixed_target":   cell(row, col_fix_tgt),
                 "pending_mobile": cell(row, col_pend_mob),
                 "pending_fixed":  cell(row, col_pend_fix),
-                "plan_vs_target
+                "plan_vs_target": cell(row, col_plan_vs),
+            }
+
+            doc = Document(io.BytesIO(tpl_bex_bytes if is_bex else tpl_nonbex_bytes))
+            set_default_font(doc, "Aptos")
+            replace_placeholders(doc, mapping)
+
+            out_name = f"{store_up}_ReviewSep_PlanOct.docx"
+            buf = io.BytesIO()
+            doc.save(buf)
+            zf.writestr(out_name, buf.getvalue())
+            built += 1
+
+            pbar.progress(min(i / (total or 1), 1.0), text=f"Φτιάχνω: {out_name} ({min(i, total)}/{total})")
+
+        except Exception as e:
+            st.warning(f"⚠️ Σφάλμα στη γραμμή {i}: {e}")
+            if debug_mode:
+                st.exception(e)
+
+    zf.close()
+    pbar.empty()
+
+    if built == 0:
+        st.error("Δεν δημιουργήθηκε αρχείο. Έλεγξε STORE mapping & templates.")
+    else:
+        st.success(f"Έτοιμα {built} αρχεία: {built}")
+        st.download_button("⬇️ Κατέβασε ZIP", data=out_zip.getvalue(), file_name="reviews_from_excel.zip")
