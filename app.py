@@ -103,27 +103,27 @@ if run:
     df = None # Αρχικοποίηση
 
     # 2. Βήμα: Ανάγνωση αρχείου και έλεγχος sheets
-    with st.spinner("Ανάγνωση αρχείου & έλεγχος..."):
-        try:
-            if file_type == 'csv':
-                # Ανάγνωση CSV
-                df = pd.read_csv(xls)
-                st.write("📑 Sheets:", ["CSV Data"])
-            elif file_type == 'xlsx':
-                # Ανάγνωση Excel
-                xfile = pd.ExcelFile(xls, engine="openpyxl")
-                st.write("📑 Sheets:", xfile.sheet_names)
-                if sheet_name not in xfile.sheet_names:
-                    st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
-                    st.stop()
-                df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
-            else:
-                st.error("Μη υποστηριζόμενος τύπος αρχείου.")
+    st.info("Ανάγνωση αρχείου & έλεγχος...") # Απλό μήνυμα αντί για spinner
+    try:
+        if file_type == 'csv':
+            # Ανάγνωση CSV
+            df = pd.read_csv(xls)
+            st.write("📑 Sheets:", ["CSV Data"])
+        elif file_type == 'xlsx':
+            # Ανάγνωση Excel
+            xfile = pd.ExcelFile(xls, engine="openpyxl")
+            st.write("📑 Sheets:", xfile.sheet_names)
+            if sheet_name not in xfile.sheet_names:
+                st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
                 st.stop()
-
-        except Exception as e:
-            st.error(f"Δεν άνοιξε το αρχείο: {e}")
+            df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
+        else:
+            st.error("Μη υποστηριζόμενος τύπος αρχείου.")
             st.stop()
+
+    except Exception as e:
+        st.error(f"Δεν άνοιξε το αρχείο: {e}")
+        st.stop()
             
     # --- Ο ΚΩΔΙΚΑΣ ΕΔΩ ΕΚΤΕΛΕΙΤΑΙ ΜΟΝΟ ΑΝ ΤΟ df ΔΙΑΒΑΣΤΗΚΕ ΕΠΙΤΥΧΩΣ ---
     
