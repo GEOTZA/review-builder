@@ -108,7 +108,7 @@ if run:
 
     # 2. Βήμα: Ανάγνωση αρχείου και έλεγχος sheets
    # 2) Δείξε διαθέσιμα sheets & διάβασε με openpyxl
-with st.spinner("Ανάγνωση Excel & έλεγχος sheets..."):
+
     try:
         df = load_df_from_excel(xls, sheet_name)
     except Exception as e:
