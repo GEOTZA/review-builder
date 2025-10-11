@@ -39,11 +39,39 @@ jobs:
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       # 5) Διαγνωστικά: δείξε τι κώδικα τρέχει ο runner (ώστε να φανεί αν υπάρχει παλιό app.py)
-      - name: Debug - show repo tree & Python
+            - name: Debug - show repo tree & app.py snippet
         run: |
+          set -x
           python --version
+          pwd
           ls -la
-          echo "----- grep spinner in app.py -----"
+          echo "----- head app.py -----"
+          sed -n '1,140p' app.py || true
+          echo "----- compile app.py (syntax check) -----"
+          python - << 'PY'
+import sys, pathlib
+p = pathlib.Path("app.py")
+print("Exists:", p.exists(), "Size:", p.stat().st_size if p.exists() else 0)
+try:
+    compile(p.read_text(encoding="utf-8"), "app.py", "exec")
+    print("✅ Python compile OK")
+except Exception as e:
+    print("❌ Python compile ERROR:", e)
+    sys.exit(1)
+PY
+
+      - name: Assert NO legacy spinner
+        run: |
+          if grep -n "st\.spinner" app.py; then
+            echo "❌ Found legacy 'st.spinner' in app.py"; exit 1
+          else
+            echo "✅ No 'st.spinner' in app.py"
+          fi
+
+      - name: Lint with flake8 (lenient for now)
+        run: |
+          pip install flake8
+          flake8 app.py --extend-ignore=E999 || true
           (grep -n "st\.spinner" app.py && echo "[FOUND st.spinner]") || echo "[NO st.spinner]"
           echo "----- app.py (lines 80-140) -----"
           sed -n '80,140p' app.py || true
