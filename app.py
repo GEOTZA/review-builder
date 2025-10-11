@@ -7,7 +7,7 @@ from docx.oxml.ns import qn
 
 st.set_page_config(page_title="Excel → Review/Plan Generator", layout="wide")
 
-# ---------- helpers ----------
+# ----------- helpers ----------
 def set_default_font(doc, font_name="Aptos"):
     for style in doc.styles:
         if hasattr(style, "font"):
