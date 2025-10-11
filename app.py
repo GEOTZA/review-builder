@@ -61,6 +61,30 @@ def cell(row, col):
     v = row[col]
     return "" if pd.isna(v) else v
 
+# --- ΝΕΑ ΣΥΝΑΡΤΗΣΗ ΓΙΑ ΑΣΦΑΛΗ ΑΝΑΓΝΩΣΗ ΔΕΔΟΜΕΝΩΝ ---
+def read_data(xls, file_type, sheet_name):
+    df = None
+    try:
+        if file_type == 'csv':
+            df = pd.read_csv(xls)
+            st.write("📑 Sheets:", ["CSV Data"])
+        elif file_type == 'xlsx':
+            xfile = pd.ExcelFile(xls, engine="openpyxl")
+            st.write("📑 Sheets:", xfile.sheet_names)
+            if sheet_name not in xfile.sheet_names:
+                st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
+                return None
+            df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
+        else:
+            st.error("Μη υποστηριζόμενος τύπος αρχείου.")
+            return None
+        return df
+    except Exception as e:
+        st.error(f"Δεν άνοιξε το αρχείο: {e}")
+        return None
+# ---------------------------------------------------
+
+
 # ---------- UI ----------
 st.title("📊 Excel/CSV → 📄 Review/Plan Generator (BEX & Non-BEX)")
 debug_mode = st.sidebar.toggle("🛠 Debug mode", value=True)
@@ -103,32 +127,12 @@ if run:
     df = None # Αρχικοποίηση
 
     # 2. Βήμα: Ανάγνωση αρχείου και έλεγχος sheets
-    st.info("Ανάγνωση αρχείου & έλεγχος...") # Απλό μήνυμα αντί για spinner
-    try:
-        if file_type == 'csv':
-            # Ανάγνωση CSV
-            df = pd.read_csv(xls)
-            st.write("📑 Sheets:", ["CSV Data"])
-        elif file_type == 'xlsx':
-            # Ανάγνωση Excel
-            xfile = pd.ExcelFile(xls, engine="openpyxl")
-            st.write("📑 Sheets:", xfile.sheet_names)
-            if sheet_name not in xfile.sheet_names:
-                st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
-                st.stop()
-            df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
-        else:
-            st.error("Μη υποστηριζόμενος τύπος αρχείου.")
-            st.stop()
-
-    except Exception as e:
-        st.error(f"Δεν άνοιξε το αρχείο: {e}")
-        st.stop()
+    st.info("Ανάγνωση αρχείου & έλεγχος...")
+    df = read_data(xls, file_type, sheet_name) # ΚΑΛΟΥΜΕ ΤΗ ΝΕΑ ΣΥΝΑΡΤΗΣΗ
             
-    # --- Ο ΚΩΔΙΚΑΣ ΕΔΩ ΕΚΤΕΛΕΙΤΑΙ ΜΟΝΟ ΑΝ ΤΟ df ΔΙΑΒΑΣΤΗΚΕ ΕΠΙΤΥΧΩΣ ---
-    
+    # --- Ελέγχουμε αν η ανάγνωση ήταν επιτυχής ---
     if df is None:
-        st.error("Αδυναμία φόρτωσης δεδομένων.")
+        st.error("Αδυναμία φόρτωσης δεδομένων ή σφάλμα ανάγνωσης.")
         st.stop()
 
 
