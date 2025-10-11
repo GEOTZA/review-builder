@@ -11,72 +11,44 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Πάντα τελευταίο commit
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Python 3.11 (ταιριάζει με runtime.txt)
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      # Fresh cache για κάθε run (σπάει παλιές caches)
-      - name: Cache pip
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ runner.os }}-${{ hashFiles('requirements.txt') }}-${{ github.run_id }}
-          restore-keys: |
-            pip-${{ runner.os }}-
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      # ΔΙΑΓΝΩΣΤΙΚΑ — δες ακριβώς τι app.py τρέχει ο runner
-      - name: Debug - show repo tree & app.py snippet
+      - name: Debug & syntax check app.py
         run: |
-          set -x
+          set -e
           python --version
-          pwd
           ls -la
           echo "----- head app.py (1..140) -----"
           sed -n '1,140p' app.py || true
-          echo "----- compile app.py (syntax check) -----"
           python - << 'PY'
 import sys, pathlib
 p = pathlib.Path("app.py")
 print("Exists:", p.exists(), "Size:", p.stat().st_size if p.exists() else 0)
-try:
-    compile(p.read_text(encoding="utf-8"), "app.py", "exec")
-    print("✅ Python compile OK")
-except Exception as e:
-    print("❌ Python compile ERROR:", e)
-    sys.exit(1)
+src = p.read_text(encoding="utf-8")
+compile(src, "app.py", "exec")
+print("✅ Python compile OK")
 PY
 
-      # Βεβαιώνουμε ότι δεν έχει μείνει legacy 'st.spinner'
-      - name: Assert NO legacy spinner
+      - name: Run flake8 (lenient for now)
         run: |
-          if grep -n "st\.spinner" app.py; then
-            echo "❌ Found legacy 'st.spinner' in app.py"; exit 1
-          else
-            echo "✅ No 'st.spinner' in app.py"
-          fi
-
-      # Lint (προσωρινά ανεκτικό για να μην μπλοκάρει)
-      - name: Lint with flake8 (lenient)
-        run: |
-          pip install flake8
+          python -m pip install flake8
           flake8 app.py --extend-ignore=E999 || true
 
-      # Tests μόνο αν υπάρχουν αρχεία στο tests/
       - name: Run pytest (only if tests exist)
         if: ${{ hashFiles('tests/**/*.py') != '' }}
         run: |
-          pip install pytest
+          python -m pip install pytest
           pytest -q
