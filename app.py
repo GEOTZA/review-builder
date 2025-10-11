@@ -128,7 +128,7 @@ def main_app_logic(xls, sheet_name, bex_mode, bex_list, tpl_bex, tpl_nonbex, deb
     col_pend_fix    = pick(cols, "TOTAL PENDING FIXED", r"pending.*fixed")
     col_plan_vs     = pick(cols, "plan vs target", r"plan.*vs.*target")
 
-    # ΕΔΩ ΕΙΝΑΙ Η ΠΕΡΙΟΧΗ ΠΟΥ ΔΙΟΡΘΩΘΗΚΕ:
+    # Καθαρό block χαρτογράφησης για αποφυγή IndentationError
     with st.expander("Χαρτογράφηση (auto)"):
         st.write({
             "STORE": col_store, 
@@ -141,7 +141,7 @@ def main_app_logic(xls, sheet_name, bex_mode, bex_list, tpl_bex, tpl_nonbex, deb
             "pending_fixed": col_pend_fix,
             "plan_vs_target": col_plan_vs
         })
-    # ΤΕΛΟΣ ΔΙΟΡΘΩΜΕΝΗΣ ΠΕΡΙΟΧΗΣ
+    # Τέλος καθαρού block
 
     if not col_store:
         st.error("Δεν βρέθηκε στήλη STORE (π.χ. 'Shop Code'). Διόρθωσε την κεφαλίδα ή πρόσθεσε alias.")
