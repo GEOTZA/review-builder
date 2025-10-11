@@ -1,0 +1,83 @@
+import pytest
+import re
+import pandas as pd
+from typing import Dict, Any
+
+# --- Helper functions copied from app.py for testing in isolated environment ---
+# Σημείωση: Στην κανονική ανάπτυξη, αυτές οι συναρτήσεις θα γίνονταν import από το app.py.
+
+def normkey(x: str) -> str:
+    """Πεζά + αφαίρεση κενών/underscores/παυλών/τελειών, για robust matching."""
+    return re.sub(r"[\s\-_\.]+", "", str(x).strip().lower())
+
+def pick(columns, *aliases):
+    """Βρες στήλη με βάση aliases (normalized). Πρώτα exact normalized, μετά contains regex."""
+    nmap = {normkey(c): c for c in columns}
+    # exact normalized
+    for a in aliases:
+        if normkey(a) in nmap:
+            return nmap[normkey(a)]
+    # contains pattern
+    for a in aliases:
+        pat = re.compile(a, re.IGNORECASE)
+        for c in columns:
+            if re.search(pat, str(c)):
+                return c
+    return None
+
+def cell(row, col):
+    if not col:
+        return ""
+    # Το 'row' μπορεί να είναι Series ή tuple, το row[col] προσπελαύνει την τιμή
+    v = row[col]
+    return "" if pd.isna(v) else v
+
+# ----------------------------------------------------------------------------
+
+# --- Pytest Functions ---
+
+def test_normkey_functionality():
+    """Ελέγχει αν το normkey καθαρίζει σωστά τα strings για mapping."""
+    assert normkey("Shop Code") == "shopcode"
+    assert normkey("TOTAL_PENDING_MOBILE") == "totalpendingmobile"
+    assert normkey("fixed-target.1") == "fixedtarget1"
+    assert normkey("  StOrE ") == "store"
+    assert normkey("") == ""
+    assert normkey(123) == "123"
+
+def test_pick_exact_match():
+    """Ελέγχει αν το pick βρίσκει στήλη με ακριβή normalized match."""
+    cols = ["Shop Code", "User Name", "Fixed Target"]
+    # Exact normalized match
+    assert pick(cols, "shop_code") == "Shop Code"
+    assert pick(cols, "fixed target") == "Fixed Target"
+    # No match
+    assert pick(cols, "NonExistentColumn") is None
+
+def test_pick_regex_match():
+    """Ελέγχει αν το pick βρίσκει στήλη με regex match."""
+    cols = ["Mobile Actual 2025", "Fixed Plan Total"]
+    # Regex match
+    assert pick(cols, r"mobile.*actual") == "Mobile Actual 2025"
+    assert pick(cols, r"fixed plan") == "Fixed Plan Total"
+    # Check prioritization: exact match should win if an exact alias is given
+    assert pick(cols, r"plan total", "Fixed Plan Total") == "Fixed Plan Total"
+
+def test_cell_extracts_data():
+    """Ελέγχει αν το cell εξάγει τιμές σωστά από Series/DataFrame row."""
+    # Simulate a DataFrame row (pandas Series)
+    row_data = {"A": 100, "B": "Value", "C": pd.NA, "D": None}
+    row = pd.Series(row_data)
+
+    assert cell(row, "A") == 100
+    assert cell(row, "B") == "Value"
+    # pd.NA is handled and converted to ""
+    assert cell(row, "C") == ""
+    # None is handled and converted to "" 
+    assert cell(row, "D") == "" 
+
+def test_cell_with_empty_column():
+    """Ελέγχει αν το cell επιστρέφει κενό string όταν το col είναι None."""
+    row = pd.Series({"A": 1})
+    assert cell(row, None) == ""
+    assert cell(row, "") == ""
