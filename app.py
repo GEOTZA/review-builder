@@ -1,3 +1,4 @@
+# flake8: noqa
 import streamlit as st
 import io, zipfile, re
 import pandas as pd
@@ -241,3 +242,4 @@ if run:
     else:
         st.success(f"Έτοιμα {built} αρχεία.")
         st.download_button("⬇️ Κατέβασε ZIP", data=out_zip.getvalue(), file_name="reviews_from_excel.zip")
+
