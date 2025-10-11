@@ -11,19 +11,19 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1) Πάντα το πιο πρόσφατο commit, πλήρες ιστορικό
+      # Πάντα τελευταίο commit
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2) Python 3.11 για να ταιριάζει με runtime.txt
+      # Python 3.11 (ταιριάζει με runtime.txt)
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # 3) Fresh cache key για κάθε run (σπάει παλιές caches)
+      # Fresh cache για κάθε run (σπάει παλιές caches)
       - name: Cache pip
         uses: actions/cache@v4
         with:
@@ -32,20 +32,19 @@ jobs:
           restore-keys: |
             pip-${{ runner.os }}-
 
-      # 4) Εγκατάσταση dependencies (ακίνδυνα)
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      # 5) Διαγνωστικά: δείξε τι κώδικα τρέχει ο runner (ώστε να φανεί αν υπάρχει παλιό app.py)
-            - name: Debug - show repo tree & app.py snippet
+      # ΔΙΑΓΝΩΣΤΙΚΑ — δες ακριβώς τι app.py τρέχει ο runner
+      - name: Debug - show repo tree & app.py snippet
         run: |
           set -x
           python --version
           pwd
           ls -la
-          echo "----- head app.py -----"
+          echo "----- head app.py (1..140) -----"
           sed -n '1,140p' app.py || true
           echo "----- compile app.py (syntax check) -----"
           python - << 'PY'
@@ -60,6 +59,7 @@ except Exception as e:
     sys.exit(1)
 PY
 
+      # Βεβαιώνουμε ότι δεν έχει μείνει legacy 'st.spinner'
       - name: Assert NO legacy spinner
         run: |
           if grep -n "st\.spinner" app.py; then
@@ -68,21 +68,13 @@ PY
             echo "✅ No 'st.spinner' in app.py"
           fi
 
-      - name: Lint with flake8 (lenient for now)
-        run: |
-          pip install flake8
-          flake8 app.py --extend-ignore=E999 || true
-          (grep -n "st\.spinner" app.py && echo "[FOUND st.spinner]") || echo "[NO st.spinner]"
-          echo "----- app.py (lines 80-140) -----"
-          sed -n '80,140p' app.py || true
-
-      # 6) Lint (προσωρινά ανεκτικό με E999 για να μην μπλοκάρει το pipeline όσο διαγνώσεις)
+      # Lint (προσωρινά ανεκτικό για να μην μπλοκάρει)
       - name: Lint with flake8 (lenient)
         run: |
           pip install flake8
-          flake8 . --extend-ignore=E999 || true
+          flake8 app.py --extend-ignore=E999 || true
 
-      # 7) Tests αν υπάρχουν
+      # Tests μόνο αν υπάρχουν αρχεία στο tests/
       - name: Run pytest (only if tests exist)
         if: ${{ hashFiles('tests/**/*.py') != '' }}
         run: |
