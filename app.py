@@ -58,13 +58,12 @@ def cell(row: pd.Series, col: str):
     return "" if pd.isna(v) else v
 
 def read_data(xls, sheet_name: str):
-    """Δέχεται .xlsx ή .csv (auto-detect από το όνομα). Επιστρέφει DataFrame ή None."""
+    """Δέχεται .xlsx ή .csv. Επιστρέφει DataFrame ή None."""
     try:
         fname = getattr(xls, "name", "")
         if fname.lower().endswith(".csv"):
             st.write("📑 Sheets:", ["CSV Data"])
             return pd.read_csv(xls)
-        # default: xlsx
         xfile = pd.ExcelFile(xls, engine="openpyxl")
         st.write("📑 Sheets:", xfile.sheet_names)
         if sheet_name not in xfile.sheet_names:
@@ -79,7 +78,7 @@ def read_data(xls, sheet_name: str):
 st.set_page_config(page_title="Excel → Review/Plan Generator", layout="wide")
 st.title("📊 Excel/CSV → 📄 Review/Plan Generator (BEX & Non-BEX)")
 
-# --- Sidebar χωρίς 'with' ---
+# --- Sidebar ΧΩΡΙΣ 'with' ---
 debug_mode = st.sidebar.toggle("🛠 Debug mode", value=True)
 test_mode  = st.sidebar.toggle("🧪 Test mode (limit rows=50)", value=True)
 
@@ -97,6 +96,7 @@ st.sidebar.caption(
     "Placeholders: [[title]], [[store]], [[mobile_actual]], [[mobile_target]], "
     "[[fixed_actual]], [[fixed_target]], [[pending_mobile]], [[pending_fixed]], [[plan_vs_target]]"
 )
+
 st.markdown("### 1) Ανέβασε Excel/CSV")
 xls = st.file_uploader("Excel/CSV", type=["xlsx", "csv"])
 sheet_name = st.text_input("Όνομα φύλλου (Sheet - μόνο για Excel)", value="Sheet1")
@@ -104,7 +104,6 @@ run = st.button("🔧 Generate")
 
 # ───────────────── MAIN ─────────────────
 if run:
-    # Αρχικοί έλεγχοι
     if not xls:
         st.error("Ανέβασε αρχείο Excel ή CSV πρώτα.")
         st.stop()
@@ -117,7 +116,6 @@ if run:
         f"BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB"
     )
 
-    # Διαβάζουμε δεδομένα (χωρίς spinner για να αποφύγουμε indentation θέματα)
     df = read_data(xls, sheet_name)
     if df is None or df.empty:
         st.error("Δεν βρέθηκαν δεδομένα στο αρχείο.")
@@ -129,7 +127,6 @@ if run:
 
     cols = list(df.columns)
 
-    # Auto-map βασισμένο στα headers σου
     col_store       = pick(cols, "Shop Code", "Shop_Code", "ShopCode", "Shop code", "STORE", "Κατάστημα", r"shop.?code")
     col_bex         = pick(cols, "BEX store", "BEX", r"bex.?store")
     col_mob_act     = pick(cols, "mobile actual", r"mobile.*actual")
@@ -175,7 +172,6 @@ if run:
                 continue
 
             store_up = store.upper()
-            # BEX flag
             if bex_mode == "Λίστα (comma-separated)":
                 is_bex = store_up in bex_list
             else:
@@ -191,29 +187,4 @@ if run:
                 "fixed_target":   cell(row, col_fix_tgt),
                 "pending_mobile": cell(row, col_pend_mob),
                 "pending_fixed":  cell(row, col_pend_fix),
-                "plan_vs_target": cell(row, col_plan_vs),
-            }
-
-            doc = Document(io.BytesIO(tpl_bex_bytes if is_bex else tpl_nonbex_bytes))
-            set_default_font(doc, "Aptos")
-            replace_placeholders(doc, mapping)
-
-            out_name = f"{store_up}_ReviewSep_PlanOct.docx"
-            buf = io.BytesIO()
-            doc.save(buf)
-            zf.writestr(out_name, buf.getvalue())
-            built += 1
-            pbar.progress(min(i/(total or 1), 1.0), text=f"Φτιάχνω: {out_name} ({i}/{total})")
-        except Exception as e:
-            st.warning(f"⚠️ Σφάλμα στη γραμμή {i}: {e}")
-            if debug_mode:
-                st.exception(e)
-
-    zf.close()
-    pbar.empty()
-
-    if built == 0:
-        st.error("Δεν δημιουργήθηκε αρχείο. Έλεγξε STORE mapping & templates.")
-    else:
-        st.success(f"Έτοιμα {built} αρχεία.")
-        st.download_button("⬇️ Κατέβασε ZIP", data=out_zip.getvalue(), file_name="reviews_from_excel.zip")
+                "plan_vs_target
