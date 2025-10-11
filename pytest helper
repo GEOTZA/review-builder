@@ -75,7 +75,7 @@ def test_cell_extracts_data():
     assert cell(row, "C") == ""
     # None is handled and converted to "" 
     assert cell(row, "D") == "" 
-
+#τεστ
 def test_cell_with_empty_column():
     """Ελέγχει αν το cell επιστρέφει κενό string όταν το col είναι None."""
     row = pd.Series({"A": 1})
