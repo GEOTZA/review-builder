@@ -84,11 +84,7 @@ xls = st.file_uploader("Excel/CSV", type=["xlsx", "csv"])
 sheet_name = st.text_input("Όνομα φύλλου (Sheet - μόνο για Excel)", value="Sheet1")
 
 run = st.button("🔧 Generate")
-def load_df_from_excel(xls, sheet_name: str) -> pd.DataFrame:
-    xfile = pd.ExcelFile(xls, engine="openpyxl")
-    if sheet_name not in xfile.sheet_names:
-        raise ValueError(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διαθέσιμα: {xfile.sheet_names}")
-    return pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
+
 if run:
     # 1. Βήμα: Αρχικοί έλεγχοι αρχείων
     if not xls:
@@ -107,14 +103,19 @@ if run:
     df = None # Αρχικοποίηση
 
     # 2. Βήμα: Ανάγνωση αρχείου και έλεγχος sheets
-   # 2) Δείξε διαθέσιμα sheets & διάβασε με openpyxl
-
-    try:
-        df = load_df_from_excel(xls, sheet_name)
-    except Exception as e:
-        st.error(f"Δεν άνοιξε το Excel: {e}")
-        st.stop()
-
+    with st.spinner("Ανάγνωση αρχείου & έλεγχος..."):
+        try:
+            if file_type == 'csv':
+                # Ανάγνωση CSV
+                df = pd.read_csv(xls)
+                st.write("📑 Sheets:", ["CSV Data"])
+            elif file_type == 'xlsx':
+                # Ανάγνωση Excel
+                xfile = pd.ExcelFile(xls, engine="openpyxl")
+                st.write("📑 Sheets:", xfile.sheet_names)
+                if sheet_name not in xfile.sheet_names:
+                    st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διάλεξε ένα από: {xfile.sheet_names}")
+                    st.stop()
                 df = pd.read_excel(xfile, sheet_name=sheet_name, engine="openpyxl")
             else:
                 st.error("Μη υποστηριζόμενος τύπος αρχείου.")
