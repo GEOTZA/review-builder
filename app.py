@@ -3,7 +3,8 @@ import io
 import re
 import zipfile
 from typing import Any, Dict
-
+import streamlit as st
+st.write("✅ App loaded successfully")
 import pandas as pd
 import streamlit as st
 from docx import Document
