@@ -61,7 +61,7 @@ def cell(row, col):
     v = row[col]
     return "" if pd.isna(v) else v
 
-# --- ΝΕΑ ΣΥΝΑΡΤΗΣΗ ΓΙΑ ΑΣΦΑΛΗ ΑΝΑΓΝΩΣΗ ΔΕΔΟΜΕΝΩΝ ---
+# --- ΣΥΝΑΡΤΗΣΗ ΑΣΦΑΛΟΥΣ ΑΝΑΓΝΩΣΗΣ ΔΕΔΟΜΕΝΩΝ ---
 def read_data(xls, file_type, sheet_name):
     df = None
     try:
@@ -82,7 +82,7 @@ def read_data(xls, file_type, sheet_name):
     except Exception as e:
         st.error(f"Δεν άνοιξε το αρχείο: {e}")
         return None
-# ---------------------------------------------------
+# -----------------------------------------------
 
 
 # ---------- UI ----------
@@ -124,17 +124,15 @@ if run:
     )
     
     file_type = xls.name.split('.')[-1].lower()
-    df = None # Αρχικοποίηση
 
     # 2. Βήμα: Ανάγνωση αρχείου και έλεγχος sheets
     st.info("Ανάγνωση αρχείου & έλεγχος...")
-    df = read_data(xls, file_type, sheet_name) # ΚΑΛΟΥΜΕ ΤΗ ΝΕΑ ΣΥΝΑΡΤΗΣΗ
+    df = read_data(xls, file_type, sheet_name)
             
     # --- Ελέγχουμε αν η ανάγνωση ήταν επιτυχής ---
     if df is None:
         st.error("Αδυναμία φόρτωσης δεδομένων ή σφάλμα ανάγνωσης.")
         st.stop()
-
 
     st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
     if debug_mode:
