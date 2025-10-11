@@ -79,23 +79,24 @@ def read_data(xls, sheet_name: str):
 st.set_page_config(page_title="Excel → Review/Plan Generator", layout="wide")
 st.title("📊 Excel/CSV → 📄 Review/Plan Generator (BEX & Non-BEX)")
 
-with st.sidebar:
-    debug_mode = st.toggle("🛠 Debug mode", value=True)
-    test_mode  = st.toggle("🧪 Test mode (limit rows=50)", value=True)
+# --- Sidebar χωρίς 'with' ---
+debug_mode = st.sidebar.toggle("🛠 Debug mode", value=True)
+test_mode  = st.sidebar.toggle("🧪 Test mode (limit rows=50)", value=True)
 
-    st.header("⚙️ BEX")
-    bex_mode = st.radio("Πηγή BEX", ["Στήλη στο Excel", "Λίστα (comma-separated)"], index=0)
-    bex_list = set()
-    if bex_mode == "Λίστα (comma-separated)":
-        bex_input = st.text_area("BEX stores", "ESC01,FKM01,LND01,DRZ01,PKK01")
-        bex_list = set(s.strip().upper() for s in bex_input.split(",") if s.strip())
+st.sidebar.header("⚙️ BEX")
+bex_mode = st.sidebar.radio("Πηγή BEX", ["Στήλη στο Excel", "Λίστα (comma-separated)"], index=0)
+bex_list = set()
+if bex_mode == "Λίστα (comma-separated)":
+    bex_input = st.sidebar.text_area("BEX stores", "ESC01,FKM01,LND01,DRZ01,PKK01")
+    bex_list = set(s.strip().upper() for s in bex_input.split(",") if s.strip())
 
-    st.subheader("📄 Templates (.docx)")
-    tpl_bex = st.file_uploader("BEX template", type=["docx"])
-    tpl_nonbex = st.file_uploader("Non-BEX template", type=["docx"])
-    st.caption("Placeholders: [[title]], [[store]], [[mobile_actual]], [[mobile_target]], "
-               "[[fixed_actual]], [[fixed_target]], [[pending_mobile]], [[pending_fixed]], [[plan_vs_target]]")
-
+st.sidebar.subheader("📄 Templates (.docx)")
+tpl_bex = st.sidebar.file_uploader("BEX template", type=["docx"])
+tpl_nonbex = st.sidebar.file_uploader("Non-BEX template", type=["docx"])
+st.sidebar.caption(
+    "Placeholders: [[title]], [[store]], [[mobile_actual]], [[mobile_target]], "
+    "[[fixed_actual]], [[fixed_target]], [[pending_mobile]], [[pending_fixed]], [[plan_vs_target]]"
+)
 st.markdown("### 1) Ανέβασε Excel/CSV")
 xls = st.file_uploader("Excel/CSV", type=["xlsx", "csv"])
 sheet_name = st.text_input("Όνομα φύλλου (Sheet - μόνο για Excel)", value="Sheet1")
