@@ -3,6 +3,7 @@
 import io
 import re
 import zipfile
+import json
 import unicodedata
 from typing import Any, Dict, Optional, List
 
@@ -27,7 +28,6 @@ def set_default_font(doc: Document, font_name: str = "Aptos") -> None:
                 style._element.rPr.rFonts.set(qn("w:eastAsia"), font_name)
                 style._element.rPr.rFonts.set(qn("w:cs"), font_name)
             except Exception:
-                # some styles don't have rPr
                 pass
 
 
@@ -165,23 +165,35 @@ if run:
         st.stop()
 
     st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
+
+    # ---- Εμφάνιση & Κατέβασμα κεφαλίδων ----
+    headers = list(df.columns)
     if debug_mode:
-        st.markdown("#### Headers όπως τους βλέπουμε:")
-        st.code(list(df.columns))
+        st.markdown("#### 📋 Headers όπως τους βλέπουμε:")
+        st.code(headers)
+        colh1, colh2 = st.columns(2)
+        with colh1:
+            st.download_button("⬇️ Κατέβασε Headers (.txt)",
+                               "\n".join(map(str, headers)).encode("utf-8"),
+                               file_name="headers.txt")
+        with colh2:
+            st.download_button("⬇️ Κατέβασε Headers (.json)",
+                               json.dumps(list(map(str, headers)), ensure_ascii=False, indent=2).encode("utf-8"),
+                               file_name="headers.json")
         st.dataframe(df.head(10))
 
-    cols = list(df.columns)
+    cols = list(map(str, df.columns))
 
     # ── Auto-map
     col_store = pick(
         cols,
-        # Συνήθη αγγλικά
+        # Αγγλικά
         "Shop Code", "Shop_Code", "ShopCode", "Shop code",
         "Store Code", "Store_Code", "StoreCode",
         "Dealer Code", "Dealer_Code", "DealerCode",
-        # Ελληνικά πιθανά
+        # Ελληνικά
         "Κωδικός Καταστήματος", "Κωδικος Καταστηματος", "Κωδικός", "Κατάστημα", "Καταστημα",
-        # Regex/γενικά
+        # Regex
         r"shop.?code", r"store.?code", r"dealer.?code"
     )
     col_bex = pick(cols, "BEX store", "BEX", r"bex.?store")
@@ -202,7 +214,7 @@ if run:
             "plan_vs_target": col_plan_vs
         })
 
-    # ── Manual mapping if something is missing
+    # ---- Manual mapping (WITH FORM + SESSION STATE)
     missing = []
     if not col_store: missing.append("STORE")
     if not col_mob_act: missing.append("mobile_actual")
@@ -213,35 +225,58 @@ if run:
     if not col_pend_fix: missing.append("pending_fixed")
     if not col_plan_vs: missing.append("plan_vs_target")
 
-    if missing:
-        st.warning("Κάποια πεδία δεν αναγνωρίστηκαν αυτόματα. Διάλεξε χειροκίνητα:")
+    def _init_key(k, v):
+        if k not in st.session_state:
+            st.session_state[k] = v or ""
+
+    _init_key("map_STORE", col_store or "")
+    _init_key("map_BEX", col_bex or "")
+    _init_key("map_mobile_actual", col_mob_act or "")
+    _init_key("map_mobile_target", col_mob_tgt or "")
+    _init_key("map_fixed_actual", col_fix_act or "")
+    _init_key("map_fixed_target", col_fix_tgt or "")
+    _init_key("map_pending_mobile", col_pend_mob or "")
+    _init_key("map_pending_fixed", col_pend_fix or "")
+    _init_key("map_plan_vs_target", col_plan_vs or "")
+    _init_key("mapping_locked", False)
+
+    if missing or not st.session_state["mapping_locked"]:
+        st.info("Ρύθμισε/κλείδωσε τη χαρτογράφηση (δεν θα ξανατρέχει σε κάθε αλλαγή).")
         options = [""] + [str(c) for c in cols]
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            col_store = st.selectbox("STORE (Shop/Dealer code)", options,
-                                     index=options.index(col_store) if col_store in options else 0) or None
-            col_bex = st.selectbox("BEX flag (Yes/No)", options,
-                                   index=options.index(col_bex) if col_bex in options else 0) or None
-            col_plan_vs = st.selectbox("plan_vs_target (%)", options,
-                                       index=options.index(col_plan_vs) if col_plan_vs in options else 0) or None
-        with c2:
-            col_mob_act = st.selectbox("mobile_actual", options,
-                                       index=options.index(col_mob_act) if col_mob_act in options else 0) or None
-            col_mob_tgt = st.selectbox("mobile_target", options,
-                                       index=options.index(col_mob_tgt) if col_mob_tgt in options else 0) or None
-            col_pend_mob = st.selectbox("pending_mobile", options,
-                                        index=options.index(col_pend_mob) if col_pend_mob in options else 0) or None
-        with c3:
-            col_fix_act = st.selectbox("fixed_actual", options,
-                                       index=options.index(col_fix_act) if col_fix_act in options else 0) or None
-            col_fix_tgt = st.selectbox("fixed_target", options,
-                                       index=options.index(col_fix_tgt) if col_fix_tgt in options else 0) or None
-            col_pend_fix = st.selectbox("pending_fixed", options,
-                                        index=options.index(col_pend_fix) if col_pend_fix in options else 0) or None
+        with st.form("mapping_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.selectbox("STORE (Shop/Dealer code)", options, key="map_STORE")
+                st.selectbox("BEX flag (Yes/No)", options, key="map_BEX")
+                st.selectbox("plan_vs_target (%)", options, key="map_plan_vs_target")
+            with c2:
+                st.selectbox("mobile_actual", options, key="map_mobile_actual")
+                st.selectbox("mobile_target", options, key="map_mobile_target")
+                st.selectbox("pending_mobile", options, key="map_pending_mobile")
+            with c3:
+                st.selectbox("fixed_actual", options, key="map_fixed_actual")
+                st.selectbox("fixed_target", options, key="map_fixed_target")
+                st.selectbox("pending_fixed", options, key="map_pending_fixed")
+
+            submitted = st.form_submit_button("✅ Χρήση χαρτογράφησης")
+            if submitted:
+                st.session_state["mapping_locked"] = True
+                st.success("Η χαρτογράφηση κλειδώθηκε. Προχώρα στην παραγωγή αρχείων.")
+
+    # τελικά χρησιμοποιούμε ό,τι είναι στο session_state (ή το auto-map αν έμεινε κενό)
+    col_store     = st.session_state["map_STORE"] or col_store
+    col_bex       = st.session_state["map_BEX"] or col_bex
+    col_plan_vs   = st.session_state["map_plan_vs_target"] or col_plan_vs
+    col_mob_act   = st.session_state["map_mobile_actual"] or col_mob_act
+    col_mob_tgt   = st.session_state["map_mobile_target"] or col_mob_tgt
+    col_pend_mob  = st.session_state["map_pending_mobile"] or col_pend_mob
+    col_fix_act   = st.session_state["map_fixed_actual"] or col_fix_act
+    col_fix_tgt   = st.session_state["map_fixed_target"] or col_fix_tgt
+    col_pend_fix  = st.session_state["map_pending_fixed"] or col_pend_fix
 
     if not col_store:
-        st.error("Δεν βρέθηκε στήλη STORE (π.χ. 'Shop Code' ή 'Dealer_Code'). Διόρθωσε/διάλεξε από τα dropdowns.")
+        st.error("Διάλεξε στήλη STORE και πάτα ‘Χρήση χαρτογράφησης’.")
         st.stop()
 
     # ── Templates
@@ -256,7 +291,6 @@ if run:
     pbar = st.progress(0, text="Δημιουργία εγγράφων…")
     total = len(df) if not test_mode else min(50, len(df))
 
-    # iterate rows
     for i, (_, row) in enumerate(df.iterrows(), start=1):
         if test_mode and i > total:
             st.info(f"🧪 Test mode: σταμάτησα στις {total} γραμμές.")
@@ -265,7 +299,9 @@ if run:
         try:
             store = str(cell(row, col_store)).strip()
             if not store:
-                pbar.progress(min(i / (total or 1), 1.0), text=f"Παράλειψη γραμμής {i} (κενό store)")
+                # skip row if store empty
+                if (i % 10 == 0) or (i == total):
+                    pbar.progress(min(i / (total or 1), 1.0), text=f"Παράλειψη γραμμής {i} (κενό store)")
                 continue
 
             store_up = store.upper()
@@ -289,6 +325,7 @@ if run:
                 "plan_vs_target": cell(row, col_plan_vs),
             }
 
+            # build docx
             doc = Document(io.BytesIO(tpl_bex_bytes if is_bex else tpl_nonbex_bytes))
             set_default_font(doc, "Aptos")
             replace_placeholders(doc, mapping)
@@ -299,7 +336,8 @@ if run:
             zf.writestr(out_name, buf.getvalue())
             built += 1
 
-            pbar.progress(min(i / (total or 1), 1.0), text=f"Φτιάχνω: {out_name} ({min(i, total)}/{total})")
+            if (i % 10 == 0) or (i == total):
+                pbar.progress(min(i / (total or 1), 1.0), text=f"Φτιάχνω: {out_name} ({min(i, total)}/{total})")
 
         except Exception as e:
             st.warning(f"⚠️ Σφάλμα στη γραμμή {i}: {e}")
