@@ -16,6 +16,24 @@ st.set_page_config(page_title="Excel → Review/Plan Generator", layout="wide")
 st.title("📊 Excel/CSV → 📄 Review/Plan Generator (BEX & Non-BEX)")
 
 # ───────────────────────────── HELPERS ─────────────────────────────
+def letter_to_index(letter: str) -> int:
+    s = str(letter).strip().upper()
+    if not s:
+        raise ValueError("Empty letter")
+    n = 0
+    for ch in s:
+        if not ('A' <= ch <= 'Z'):
+            raise ValueError(f"Bad column letter: {letter}")
+        n = n * 26 + (ord(ch) - ord('A') + 1)
+    return n - 1
+
+def excel_letter_to_colname(df: pd.DataFrame, letter: str) -> str | None:
+    if not letter or not letter.strip():
+        return None
+    idx = letter_to_index(letter)
+    if idx < 0 or idx >= len(df.columns):
+        return None
+    return str(df.columns[idx])
 def set_default_font(doc: Document, font_name: str = "Aptos") -> None:
     """Ορίζει προεπιλεγμένη γραμματοσειρά σε styles (και eastAsia/complex)."""
     for style in doc.styles:
@@ -158,6 +176,38 @@ st.sidebar.caption(
 
 st.sidebar.subheader("📌 Manual mapping (Excel letters)")
 # Από το mapping που έδωσες (γράμματα/διγράμματα). Αλλάζουν από το UI.
+def resolve_letters_preview(df: pd.DataFrame, mapping_letters: dict[str, str]) -> dict[str, str | None]:
+    out = {}
+    for k, L in mapping_letters.items():
+        out[k] = excel_letter_to_colname(df, L) if L and L.strip() else None
+    return out
+
+letters_map = {
+    "plan_vs_target": letter_plan_vs,
+    "mobile_plan": letter_mobile_plan,
+    "mobile_actual": letter_mobile_act,
+    "mobile_target": letter_mobile_tgt,
+    "fixed_target": letter_fixed_tgt,
+    "fixed_actual": letter_fixed_act,
+    "voice_vs_target": letter_voice_vs,
+    "fixed_vs_target": letter_fixed_vs,
+    "llu_actual": letter_llu,
+    "nga_actual": letter_nga,
+    "ftth_actual": letter_ftth,
+    "eon_tv_actual": letter_eon,
+    "fwa_actual": letter_fwa,
+    "mobile_upgrades": letter_mob_upg,
+    "fixed_upgrades": letter_fix_upg,
+    "pending_mobile": letter_pend_mob,
+    "pending_fixed": letter_pend_fix,
+}
+
+st.markdown("#### 🧭 Letters → Headers (live)")
+if xls:
+    _dfp = read_data(xls, sheet_name)
+    if _dfp is not None and not _dfp.empty:
+        st.json(resolve_letters_preview(_dfp, letters_map))
+        st.caption("Αν κάποιο key δείχνει σε λάθος header (π.χ. 'Dealer_Code'), άλλαξε το γράμμα ή το Sheet.")
 L_PLAN_VS   = st.sidebar.text_input("plan vs target", value="A")
 L_MOB_PLAN  = st.sidebar.text_input("mobile plan (optional)", value="B")
 L_BEXCOL    = st.sidebar.text_input("BEX (YES/NO) column", value="J")
@@ -321,7 +371,14 @@ if run:
 
     pbar = st.progress(0, text="Δημιουργία εγγράφων…")
     total = len(df) if not test_mode else min(50, len(df))
-
+store_col = col_store or excel_letter_to_colname(df, letter_store)  # αν έχεις letter για STORE
+conflicts = []
+for k, L in letters_map.items():
+    hdr = excel_letter_to_colname(df, L) if L and L.strip() else None
+    if hdr and store_col and hdr == store_col:
+        conflicts.append((k, L, hdr))
+if conflicts:
+    st.warning(f"⚠️ Κάποια πεδία πέφτουν στη στήλη STORE ({store_col}): {conflicts}")
     for i, (_, row) in enumerate(df.iterrows(), start=1):
         if test_mode and i > total:
             st.info(f"🧪 Test mode: σταμάτησα στις {total} γραμμές.")
