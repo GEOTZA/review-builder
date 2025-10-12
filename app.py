@@ -172,6 +172,17 @@ if run:
         st.stop()
 
     df, wb, ws = read_excel_both(xls, sheet_name)
+    # --- FULL HEADER DUMP (debug) ---
+if ws is not None:
+    all_headers = []
+    # διαβάζουμε μέχρι τη τελευταία "λογική" στήλη του φύλλου
+    for col in range(1, ws.max_column + 1):
+        letter = get_column_letter(col)
+        h = ws.cell(row=1, column=col).value
+        all_headers.append({"letter": letter, "header_row1": "" if h is None else str(h)})
+    with st.expander("📚 ALL headers in sheet (Row 1)"):
+        st.write(f"Columns detected: {ws.max_column}")
+        st.dataframe(pd.DataFrame(all_headers))
     if df is None:
         st.stop()
 
