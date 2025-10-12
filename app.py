@@ -147,7 +147,7 @@ df = pd.read_excel(xfile, sheet_name=xfile.sheet_names[0])
 print("🔍 Headers:")
 print(list(df.columns))
 
-if debug_mode:
+ if debug_mode:
         st.dataframe(df.head(10))
 
     cols = list(df.columns)
