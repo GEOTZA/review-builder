@@ -181,7 +181,26 @@ def resolve_letters_preview(df: pd.DataFrame, mapping_letters: dict[str, str]) -
     for k, L in mapping_letters.items():
         out[k] = excel_letter_to_colname(df, L) if L and L.strip() else None
     return out
-
+# ---------------- Manual Excel Letters (user input) ----------------
+st.sidebar.subheader("📎 Manual mapping (Excel letters)")
+letter_plan_vs    = st.sidebar.text_input("plan vs target", "A")
+letter_mobile_plan = st.sidebar.text_input("mobile plan (optional)", "B")
+letter_bex_col    = st.sidebar.text_input("BEX (YES/NO) column", "J")
+letter_mobile_act = st.sidebar.text_input("mobile actual", "N")
+letter_mobile_tgt = st.sidebar.text_input("mobile target", "O")
+letter_fixed_tgt  = st.sidebar.text_input("fixed target", "P")
+letter_fixed_act  = st.sidebar.text_input("total fixed actual", "Q")
+letter_voice_vs   = st.sidebar.text_input("voice vs target", "R")
+letter_fixed_vs   = st.sidebar.text_input("fixed vs target", "S")
+letter_llu        = st.sidebar.text_input("llu actual", "T")
+letter_nga        = st.sidebar.text_input("nga actual", "U")
+letter_ftth       = st.sidebar.text_input("ftth actual", "V")
+letter_eon        = st.sidebar.text_input("eon tv actual", "X")
+letter_fwa        = st.sidebar.text_input("fwa actual", "Y")
+letter_mob_upg    = st.sidebar.text_input("mobile upgrades", "AA")
+letter_fix_upg    = st.sidebar.text_input("fixed upgrades", "AB")
+letter_pend_mob   = st.sidebar.text_input("total pending mobile", "AF")
+letter_pend_fix   = st.sidebar.text_input("total pending fixed", "AH")
 letters_map = {
     "plan_vs_target": letter_plan_vs,
     "mobile_plan": letter_mobile_plan,
