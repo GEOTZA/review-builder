@@ -1,6 +1,5 @@
-f# app.py
+# app.py
 # Streamlit: Excel/CSV -> (BEX / Non-BEX) Review-Plan .docx (ZIP)
-# Author: GEOTZA + Nova helper
 
 import io
 import re
@@ -33,8 +32,8 @@ def replace_placeholders(doc: Document, mapping: Dict[str, Any]) -> None:
     pattern = re.compile(r"\[\[([A-Za-z0-9_]+)\]\]")
 
     def subfun(s: str) -> str:
-        key_to_val = lambda m: "" if mapping.get(m.group(1)) is None else str(mapping.get(m.group(1), ""))
-        return pattern.sub(key_to_val, s)
+        val = lambda m: "" if mapping.get(m.group(1)) is None else str(mapping.get(m.group(1), ""))
+        return pattern.sub(val, s)
 
     for p in doc.paragraphs:
         for r in p.runs:
@@ -54,8 +53,9 @@ def pick(columns, *aliases) -> str:
     """Βρες στήλη με βάση aliases (πρώτα exact normalized, μετά regex contains)."""
     nmap = {normkey(c): c for c in columns}
     for a in aliases:
-        if normkey(a) in nmap:
-            return nmap[normkey(a)]
+        nk = normkey(a)
+        if nk in nmap:
+            return nmap[nk]
     for a in aliases:
         pat = re.compile(a, re.IGNORECASE)
         for c in columns:
@@ -69,7 +69,7 @@ def cell(row: pd.Series, col: str):
     v = row[col]
     return "" if pd.isna(v) else v
 
-def read_data(xls, sheet_name: str) -> pd.DataFrame | None:
+def read_data(xls, sheet_name: str):
     """Δέχεται .xlsx ή .csv (auto-detect από το όνομα). Επιστρέφει DataFrame ή None."""
     try:
         fname = getattr(xls, "name", "")
@@ -110,7 +110,6 @@ st.sidebar.caption(
 st.markdown("### 1) Ανέβασε Excel/CSV")
 xls = st.file_uploader("Excel/CSV", type=["xlsx", "csv"])
 sheet_name = st.text_input("Όνομα φύλλου (Sheet - μόνο για Excel)", value="Sheet1")
-
 run = st.button("🔧 Generate")
 
 # ───────────────────────────── MAIN ─────────────────────────────
@@ -135,26 +134,19 @@ if run:
         st.stop()
 
     st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
-    import pandas as pd
-
-# Φόρτωση Excel για να δούμε τις κεφαλίδες
-xls_path = "sheet1.xlsx"
-
-xfile = pd.ExcelFile(xls_path, engine="openpyxl")
-print("📑 Sheets:", xfile.sheet_names)
-
-df = pd.read_excel(xfile, sheet_name=xfile.sheet_names[0])
-print("🔍 Headers:")
-print(list(df.columns))
-
- if debug_mode:
+    if debug_mode:
+        st.write("🔍 Headers όπως τους βλέπουμε:", list(df.columns))
         st.dataframe(df.head(10))
 
     cols = list(df.columns)
 
     # Auto-map βασισμένο στα headers
-    col_store = pick(cols, "Shop Code", "Shop_Code", "ShopCode", "Shop code", "STORE", "Κατάστημα",
-                 "shop", "store", "code καταστήματος", "ΚΩΔΙΚΟΣ ΚΑΤΑΣΤΗΜΑΤΟΣ", r"shop.?code")
+    col_store = pick(
+        cols,
+        "Shop Code", "Shop_Code", "ShopCode", "Shop code", "STORE", "Κατάστημα",
+        "shop code", "shop", "store", "ΚΩΔΙΚΟΣ ΚΑΤΑΣΤΗΜΑΤΟΣ", "code καταστήματος",
+        r"shop.?code"
+    )
     col_bex      = pick(cols, "BEX store", "BEX", r"bex.?store")
     col_mob_act  = pick(cols, "mobile actual", r"mobile.*actual")
     col_mob_tgt  = pick(cols, "mobile target", r"mobile.*target", "mobile plan")
