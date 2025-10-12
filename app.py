@@ -1,26 +1,23 @@
-# app.py — Streamlit: Excel/CSV -> (BEX / Non-BEX) Review-Plan .docx (ZIP)
+# app.py
+# Streamlit: Excel/CSV -> (BEX / Non-BEX) Review-Plan .docx (ZIP)
 
 import io
 import re
 import zipfile
-import json
-import unicodedata
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional
 
 import pandas as pd
 import streamlit as st
 from docx import Document
 from docx.oxml.ns import qn
 
-
 # ───────────────────────────── UI CONFIG ─────────────────────────────
 st.set_page_config(page_title="Excel → Review/Plan Generator", layout="wide")
 st.title("📊 Excel/CSV → 📄 Review/Plan Generator (BEX & Non-BEX)")
 
-
 # ───────────────────────────── HELPERS ─────────────────────────────
 def set_default_font(doc: Document, font_name: str = "Aptos") -> None:
-    """Set default font for all styles (incl. eastAsia) to avoid font mismatches."""
+    """Ορίζει προεπιλεγμένη γραμματοσειρά σε styles (και eastAsia/complex)."""
     for style in doc.styles:
         if hasattr(style, "font"):
             try:
@@ -30,22 +27,17 @@ def set_default_font(doc: Document, font_name: str = "Aptos") -> None:
             except Exception:
                 pass
 
-
 def replace_placeholders(doc: Document, mapping: Dict[str, Any]) -> None:
-    """Replace [[placeholders]] across paragraphs and tables."""
+    """Αντικαθιστά [[placeholders]] σε paragraphs & tables."""
     pattern = re.compile(r"\[\[([A-Za-z0-9_]+)\]\]")
 
     def subfun(s: str) -> str:
-        def val(m):
-            key = m.group(1)
-            v = mapping.get(key, "")
-            return "" if v is None else str(v)
-        return pattern.sub(val, s)
+        key_to_val = lambda m: "" if mapping.get(m.group(1)) is None else str(mapping.get(m.group(1), ""))
+        return pattern.sub(key_to_val, s)
 
     for p in doc.paragraphs:
         for r in p.runs:
             r.text = subfun(r.text)
-
     for t in doc.tables:
         for row in t.rows:
             for cell in row.cells:
@@ -53,38 +45,22 @@ def replace_placeholders(doc: Document, mapping: Dict[str, Any]) -> None:
                     for r in p.runs:
                         r.text = subfun(r.text)
 
-
 def normkey(x: str) -> str:
-    """
-    Aggressive header normalization:
-    - NFKD unicode normalize (removes accents)
-    - lowercase
-    - remove ALL non [a-z0-9]
-    """
-    s = unicodedata.normalize("NFKD", str(x))
-    s = s.lower()
-    s = re.sub(r"[^a-z0-9]+", "", s)
-    return s
+    """lower + αφαίρεση κενών/-,_,. για robust ταύτιση headers."""
+    return re.sub(r"[\s\-_\.]+", "", str(x).strip().lower())
 
-
-def pick(columns: List[str], *aliases: str) -> Optional[str]:
-    """Find a column by (normalized) aliases, then by regex contains."""
+def pick(columns, *aliases) -> str:
+    """Βρες στήλη με βάση aliases (πρώτα exact normalized, μετά regex contains)."""
     nmap = {normkey(c): c for c in columns}
-    # exact by normalized
     for a in aliases:
         if normkey(a) in nmap:
             return nmap[normkey(a)]
-    # regex contains on the original headers
     for a in aliases:
-        try:
-            pat = re.compile(a, re.IGNORECASE)
-        except re.error:
-            continue
+        pat = re.compile(a, re.IGNORECASE)
         for c in columns:
             if re.search(pat, str(c)):
                 return c
-    return None
-
+    return ""
 
 def cell(row: pd.Series, col: Optional[str]):
     if not col:
@@ -92,20 +68,63 @@ def cell(row: pd.Series, col: Optional[str]):
     v = row[col]
     return "" if pd.isna(v) else v
 
+# --- Excel letters -> 0-based index (A=0, ..., Z=25, AA=26, ...) ---
+def xlcol_to_idx(col_letter: str) -> int:
+    s = str(col_letter).strip().upper()
+    if not s:
+        return -1
+    n = 0
+    for ch in s:
+        if not ('A' <= ch <= 'Z'):
+            return -1
+        n = n * 26 + (ord(ch) - ord('A') + 1)
+    return n - 1
 
-def read_data(file, sheet_name: str) -> Optional[pd.DataFrame]:
-    """
-    Accepts .xlsx or .csv (auto-detect by uploaded name).
-    Returns DataFrame or None (and shows a user-friendly error).
-    """
+def col_from_letter(df: pd.DataFrame, letter: Optional[str]) -> str:
+    if not letter:
+        return ""
+    i = xlcol_to_idx(letter)
+    if i < 0 or i >= len(df.columns):
+        return ""
+    return df.columns[i]
+
+def resolve_col(df: pd.DataFrame, auto_name: str, letter: Optional[str]) -> str:
+    return (col_from_letter(df, letter) if letter else (auto_name or "")) or ""
+
+def truthy(val) -> bool:
+    s = str(val).strip().lower()
+    return s in {"yes", "y", "true", "1", "ναι", "nai", "✔", "✓"}
+
+def fmt_percent(val):
+    """Δέχεται 0.85 ή 85 ή '85%' -> '85%'"""
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ""
+    s = str(val).strip()
+    if not s:
+        return ""
+    if s.endswith("%"):
+        try:
+            return f"{float(s[:-1].replace(',', '.')):.0f}%"
+        except Exception:
+            return s
     try:
-        fname = getattr(file, "name", "")
+        num = float(s.replace(",", "."))
+        if num <= 1:
+            num *= 100
+        return f"{num:.0f}%"
+    except Exception:
+        return s
+
+def read_data(xls, sheet_name: str) -> Optional[pd.DataFrame]:
+    """Δέχεται .xlsx ή .csv (auto-detect από το όνομα). Επιστρέφει DataFrame ή None."""
+    try:
+        fname = getattr(xls, "name", "")
         if fname.lower().endswith(".csv"):
             st.write("📑 Sheets:", ["CSV Data"])
-            return pd.read_csv(file)
-
+            return pd.read_csv(xls)
         # default: xlsx
-        xfile = pd.ExcelFile(file, engine="openpyxl")
+        xls.seek(0)
+        xfile = pd.ExcelFile(xls, engine="openpyxl")
         st.write("📑 Sheets:", xfile.sheet_names)
         if sheet_name not in xfile.sheet_names:
             st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διαθέσιμα: {xfile.sheet_names}")
@@ -115,37 +134,72 @@ def read_data(file, sheet_name: str) -> Optional[pd.DataFrame]:
         st.error(f"Δεν άνοιξε το αρχείο: {e}")
         return None
 
-
 # ───────────────────────────── SIDEBAR ─────────────────────────────
 debug_mode = st.sidebar.toggle("🛠 Debug mode", value=True)
-test_mode = st.sidebar.toggle("🧪 Test mode (limit rows=50)", value=True)
+test_mode  = st.sidebar.toggle("🧪 Test mode (limit rows=50)", value=True)
 
 st.sidebar.header("⚙️ BEX")
-bex_mode = st.sidebar.radio("Πηγή BEX", ["Στήλη στο Excel", "Λίστα (comma-separated)"], index=0)
+bex_mode = st.sidebar.radio("Πηγή BEX", ["Στήλη στο Excel", "Λίστα (comma-separated)"], index=1)
+bex_default = "DRZ01,FKM01,ESC01,LND01,PKK01"
 bex_list = set()
 if bex_mode == "Λίστα (comma-separated)":
-    bex_input = st.sidebar.text_area("BEX stores", "ESC01,FKM01,LND01,DRZ01,PKK01")
+    bex_input = st.sidebar.text_area("BEX stores", bex_default)
     bex_list = set(s.strip().upper() for s in bex_input.split(",") if s.strip())
 
 st.sidebar.subheader("📄 Templates (.docx)")
-tpl_bex = st.sidebar.file_uploader("BEX template", type=["docx"])
+tpl_bex    = st.sidebar.file_uploader("BEX template", type=["docx"])
 tpl_nonbex = st.sidebar.file_uploader("Non-BEX template", type=["docx"])
 st.sidebar.caption(
-    "Placeholders: [[title]], [[store]], [[mobile_actual]], [[mobile_target]], "
-    "[[fixed_actual]], [[fixed_target]], [[pending_mobile]], [[pending_fixed]], [[plan_vs_target]]"
+    "Placeholders: [[title]], [[store]], [[plan_month]], [[plan_vs_target]], [[mobile_actual]], [[mobile_target]], "
+    "[[fixed_actual]], [[fixed_target]], [[voice_vs_target]], [[fixed_vs_target]], [[llu_actual]], [[nga_actual]], "
+    "[[ftth_actual]], [[eon_tv_actual]], [[fwa_actual]], [[mobile_upgrades]], [[fixed_upgrades]], "
+    "[[pending_mobile]], [[pending_fixed]]"
 )
 
+st.sidebar.subheader("📌 Manual mapping (Excel letters)")
+# Από το mapping που έδωσες (γράμματα/διγράμματα). Αλλάζουν από το UI.
+L_PLAN_VS   = st.sidebar.text_input("plan vs target", value="A")
+L_MOB_PLAN  = st.sidebar.text_input("mobile plan (optional)", value="B")
+L_BEXCOL    = st.sidebar.text_input("BEX (YES/NO) column", value="J")
+
+L_MOB_ACT   = st.sidebar.text_input("MOBILE ACTUAL", value="N")
+L_MOB_TGT   = st.sidebar.text_input("mobile target", value="O")
+L_FIX_TGT   = st.sidebar.text_input("fixed target", value="P")
+L_FIX_ACT   = st.sidebar.text_input("total fixed actual", value="Q")
+
+L_VOICE_VS  = st.sidebar.text_input("voice Vs target %", value="R")
+L_FIXED_VS  = st.sidebar.text_input("fixed vs target %", value="S")
+
+L_LLU       = st.sidebar.text_input("llu actual", value="T")
+L_NGA       = st.sidebar.text_input("nga actual", value="U")
+L_FTTH      = st.sidebar.text_input("ftth actual", value="V")
+L_EON       = st.sidebar.text_input("eon tv actual", value="X")
+L_FWA       = st.sidebar.text_input("fwa actual", value="Y")
+
+L_MOB_UPG   = st.sidebar.text_input("mobile upgrades", value="aa")
+L_FIX_UPG   = st.sidebar.text_input("fixed upgrades", value="ab")
+L_PEND_MOB  = st.sidebar.text_input("total pending mobile", value="af")
+L_PEND_FIX  = st.sidebar.text_input("total pending fixed", value="ah")
+
+L_STORE     = st.sidebar.text_input("STORE (Shop Code) override", value="")
+st.sidebar.caption("Αν αφήσεις κενό, θα γίνει auto-map από headers (Shop Code, STORE κ.λπ.).")
+
+st.sidebar.subheader("👀 Preview letters")
+preview_letters = st.sidebar.text_input(
+    "π.χ. A,B,J,N,O,P,Q,R,S,T,U,V,X,Y,aa,ab,af,ah",
+    value="A,J,N,O,P,Q,R,S,V,Y,aa,ab,af,ah"
+)
 
 # ───────────────────────────── MAIN INPUTS ─────────────────────────────
 st.markdown("### 1) Ανέβασε Excel/CSV")
 xls = st.file_uploader("Excel/CSV", type=["xlsx", "csv"])
 sheet_name = st.text_input("Όνομα φύλλου (Sheet - μόνο για Excel)", value="Sheet1")
-run = st.button("🔧 Generate")
 
+run = st.button("🔧 Generate")
 
 # ───────────────────────────── MAIN ─────────────────────────────
 if run:
-    # Basic checks
+    # Αρχικοί έλεγχοι
     if not xls:
         st.error("Ανέβασε αρχείο Excel ή CSV πρώτα.")
         st.stop()
@@ -158,132 +212,109 @@ if run:
         f"BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB"
     )
 
-    # Read data
+    # Διαβάζουμε δεδομένα
     df = read_data(xls, sheet_name)
     if df is None or df.empty:
         st.error("Δεν βρέθηκαν δεδομένα στο αρχείο.")
         st.stop()
 
     st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
-
-    # ---- Εμφάνιση & Κατέβασμα κεφαλίδων ----
-    headers = list(df.columns)
     if debug_mode:
-        st.markdown("#### 📋 Headers όπως τους βλέπουμε:")
-        st.code(headers)
-        colh1, colh2 = st.columns(2)
-        with colh1:
-            st.download_button("⬇️ Κατέβασε Headers (.txt)",
-                               "\n".join(map(str, headers)).encode("utf-8"),
-                               file_name="headers.txt")
-        with colh2:
-            st.download_button("⬇️ Κατέβασε Headers (.json)",
-                               json.dumps(list(map(str, headers)), ensure_ascii=False, indent=2).encode("utf-8"),
-                               file_name="headers.json")
+        st.write("🔍 Headers:", list(df.columns))
         st.dataframe(df.head(10))
 
-    cols = list(map(str, df.columns))
+    cols = list(df.columns)
 
-    # ── Auto-map
-    col_store = pick(
-        cols,
-        # Αγγλικά
-        "Shop Code", "Shop_Code", "ShopCode", "Shop code",
-        "Store Code", "Store_Code", "StoreCode",
-        "Dealer Code", "Dealer_Code", "DealerCode",
-        # Ελληνικά
-        "Κωδικός Καταστήματος", "Κωδικος Καταστηματος", "Κωδικός", "Κατάστημα", "Καταστημα",
-        # Regex
-        r"shop.?code", r"store.?code", r"dealer.?code"
-    )
-    col_bex = pick(cols, "BEX store", "BEX", r"bex.?store")
-    col_mob_act = pick(cols, "mobile actual", r"mobile.*actual")
-    col_mob_tgt = pick(cols, "mobile target", r"mobile.*target", "mobile plan")
-    col_fix_tgt = pick(cols, "target fixed", r"fixed.*target", "fixed plan total", "fixed plan")
-    col_fix_act = pick(cols, "total fixed", r"(total|sum).?fixed.*actual", "fixed actual")
-    col_pend_mob = pick(cols, "TOTAL PENDING MOBILE", r"pending.*mobile")
-    col_pend_fix = pick(cols, "TOTAL PENDING FIXED", r"pending.*fixed")
-    col_plan_vs = pick(cols, "plan vs target", r"plan.*vs.*target")
+    # AUTO-MAP από headers
+    col_store   = pick(cols, "Shop Code","Shop_Code","ShopCode","Shop code","STORE","Κατάστημα", r"shop.?code","dealer code")
+    col_bex     = pick(cols, "BEX store","BEX","is_bex","bex_flag", r"\bbex\b", r"bex.*store", r"is.*bex")
+    col_plan_vs = pick(cols, "plan vs target","plan_vs_target","% plan", r"plan.*vs.*target")
 
-    with st.expander("Χαρτογράφηση (auto)"):
+    col_mob_act = pick(cols, "MOBILE ACTUAL","mobile actual", r"mobile.*actual")
+    col_mob_tgt = pick(cols, "mobile target", r"mobile.*target","mobile plan")
+    col_fix_tgt = pick(cols, "fixed target","target fixed", r"fixed.*target","fixed plan total","fixed plan")
+    col_fix_act = pick(cols, "total fixed actual","total fixed", r"(total|sum).?fixed.*actual","fixed actual")
+
+    col_voice_vs= pick(cols, "voice Vs target", r"voice.*vs.*target")
+    col_fixed_vs= pick(cols, "fixed vs target", r"fixed.*vs.*target")
+
+    col_llu     = pick(cols, "llu actual", r"llu.*actual")
+    col_nga     = pick(cols, "nga actual", r"nga.*actual")
+    col_ftth    = pick(cols, "ftth actual", r"ftth.*actual")
+    col_eon     = pick(cols, "eon tv actual", r"(eon|tv).*actual")
+    col_fwa     = pick(cols, "fwa actual", r"fwa.*actual")
+
+    col_mob_upg = pick(cols, "mobile upgrades", r"mobile.*upg")
+    col_fix_upg = pick(cols, "fixed upgrades", r"fixed.*upg")
+    col_pend_m  = pick(cols, "total pending mobile", r"pending.*mobile")
+    col_pend_f  = pick(cols, "total pending fixed", r"pending.*fixed")
+
+    # OVERRIDE με γράμματα (αν έχουν δοθεί)
+    col_store   = resolve_col(df, col_store,   L_STORE)
+    col_bex     = resolve_col(df, col_bex,     L_BEXCOL)
+    col_plan_vs = resolve_col(df, col_plan_vs, L_PLAN_VS)
+
+    col_mob_act = resolve_col(df, col_mob_act, L_MOB_ACT)
+    col_mob_tgt = resolve_col(df, col_mob_tgt, L_MOB_TGT)
+    col_fix_tgt = resolve_col(df, col_fix_tgt, L_FIX_TGT)
+    col_fix_act = resolve_col(df, col_fix_act, L_FIX_ACT)
+
+    col_voice_vs= resolve_col(df, col_voice_vs, L_VOICE_VS)
+    col_fixed_vs= resolve_col(df, col_fixed_vs, L_FIXED_VS)
+
+    col_llu     = resolve_col(df, col_llu,     L_LLU)
+    col_nga     = resolve_col(df, col_nga,     L_NGA)
+    col_ftth    = resolve_col(df, col_ftth,    L_FTTH)
+    col_eon     = resolve_col(df, col_eon,     L_EON)
+    col_fwa     = resolve_col(df, col_fwa,     L_FWA)
+
+    col_mob_upg = resolve_col(df, col_mob_upg, L_MOB_UPG)
+    col_fix_upg = resolve_col(df, col_fix_upg, L_FIX_UPG)
+    col_pend_m  = resolve_col(df, col_pend_m,  L_PEND_MOB)
+    col_pend_f  = resolve_col(df, col_pend_f,  L_PEND_FIX)
+
+    # Εμφάνιση mapping
+    with st.expander("Χαρτογράφηση (auto + manual)"):
         st.write({
             "STORE": col_store, "BEX": col_bex,
+            "plan_vs_target": col_plan_vs,
             "mobile_actual": col_mob_act, "mobile_target": col_mob_tgt,
             "fixed_target": col_fix_tgt, "fixed_actual": col_fix_act,
-            "pending_mobile": col_pend_mob, "pending_fixed": col_pend_fix,
-            "plan_vs_target": col_plan_vs
+            "voice_vs_target": col_voice_vs, "fixed_vs_target": col_fixed_vs,
+            "llu_actual": col_llu, "nga_actual": col_nga, "ftth_actual": col_ftth,
+            "eon_tv_actual": col_eon, "fwa_actual": col_fwa,
+            "mobile_upgrades": col_mob_upg, "fixed_upgrades": col_fix_upg,
+            "pending_mobile": col_pend_m, "pending_fixed": col_pend_f
         })
 
-    # ---- Manual mapping (WITH FORM + SESSION STATE)
-    missing = []
-    if not col_store: missing.append("STORE")
-    if not col_mob_act: missing.append("mobile_actual")
-    if not col_mob_tgt: missing.append("mobile_target")
-    if not col_fix_act: missing.append("fixed_actual")
-    if not col_fix_tgt: missing.append("fixed_target")
-    if not col_pend_mob: missing.append("pending_mobile")
-    if not col_pend_fix: missing.append("pending_fixed")
-    if not col_plan_vs: missing.append("plan_vs_target")
-
-    def _init_key(k, v):
-        if k not in st.session_state:
-            st.session_state[k] = v or ""
-
-    _init_key("map_STORE", col_store or "")
-    _init_key("map_BEX", col_bex or "")
-    _init_key("map_mobile_actual", col_mob_act or "")
-    _init_key("map_mobile_target", col_mob_tgt or "")
-    _init_key("map_fixed_actual", col_fix_act or "")
-    _init_key("map_fixed_target", col_fix_tgt or "")
-    _init_key("map_pending_mobile", col_pend_mob or "")
-    _init_key("map_pending_fixed", col_pend_fix or "")
-    _init_key("map_plan_vs_target", col_plan_vs or "")
-    _init_key("mapping_locked", False)
-
-    if missing or not st.session_state["mapping_locked"]:
-        st.info("Ρύθμισε/κλείδωσε τη χαρτογράφηση (δεν θα ξανατρέχει σε κάθε αλλαγή).")
-        options = [""] + [str(c) for c in cols]
-
-        with st.form("mapping_form"):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.selectbox("STORE (Shop/Dealer code)", options, key="map_STORE")
-                st.selectbox("BEX flag (Yes/No)", options, key="map_BEX")
-                st.selectbox("plan_vs_target (%)", options, key="map_plan_vs_target")
-            with c2:
-                st.selectbox("mobile_actual", options, key="map_mobile_actual")
-                st.selectbox("mobile_target", options, key="map_mobile_target")
-                st.selectbox("pending_mobile", options, key="map_pending_mobile")
-            with c3:
-                st.selectbox("fixed_actual", options, key="map_fixed_actual")
-                st.selectbox("fixed_target", options, key="map_fixed_target")
-                st.selectbox("pending_fixed", options, key="map_pending_fixed")
-
-            submitted = st.form_submit_button("✅ Χρήση χαρτογράφησης")
-            if submitted:
-                st.session_state["mapping_locked"] = True
-                st.success("Η χαρτογράφηση κλειδώθηκε. Προχώρα στην παραγωγή αρχείων.")
-
-    # τελικά χρησιμοποιούμε ό,τι είναι στο session_state (ή το auto-map αν έμεινε κενό)
-    col_store     = st.session_state["map_STORE"] or col_store
-    col_bex       = st.session_state["map_BEX"] or col_bex
-    col_plan_vs   = st.session_state["map_plan_vs_target"] or col_plan_vs
-    col_mob_act   = st.session_state["map_mobile_actual"] or col_mob_act
-    col_mob_tgt   = st.session_state["map_mobile_target"] or col_mob_tgt
-    col_pend_mob  = st.session_state["map_pending_mobile"] or col_pend_mob
-    col_fix_act   = st.session_state["map_fixed_actual"] or col_fix_act
-    col_fix_tgt   = st.session_state["map_fixed_target"] or col_fix_tgt
-    col_pend_fix  = st.session_state["map_pending_fixed"] or col_pend_fix
-
     if not col_store:
-        st.error("Διάλεξε στήλη STORE και πάτα ‘Χρήση χαρτογράφησης’.")
+        st.error("Δεν βρέθηκε στήλη STORE (π.χ. 'Shop Code'). Διόρθωσε την κεφαλίδα ή δώσε γράμμα στήλης.")
         st.stop()
 
-    # ── Templates
-    tpl_bex_bytes = tpl_bex.read()
+    # Προεπισκόπηση με γράμματα
+    if preview_letters.strip():
+        letters = [s.strip() for s in preview_letters.split(",") if s.strip()]
+        preview_cols = [c for c in (col_from_letter(df, s) for s in letters) if c]
+        if preview_cols:
+            st.write("🔎 **Preview**:", preview_cols)
+            st.dataframe(df[preview_cols].head(20))
+
+    # Διαβάζουμε μοναδικό κελί B17 για "μήνας Πλάνου"
+    plan_month = ""
+    try:
+        from openpyxl import load_workbook
+        xls.seek(0)
+        wb = load_workbook(filename=xls, read_only=True, data_only=True)
+        ws = wb[sheet_name] if sheet_name in wb.sheetnames else wb.active
+        plan_month = str(ws["B17"].value or "").strip()
+    except Exception:
+        plan_month = ""
+
+    # Templates → bytes
+    tpl_bex_bytes    = tpl_bex.read()
     tpl_nonbex_bytes = tpl_nonbex.read()
 
-    # ── Build ZIP
+    # Out ZIP
     out_zip = io.BytesIO()
     zf = zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED)
     built = 0
@@ -299,33 +330,44 @@ if run:
         try:
             store = str(cell(row, col_store)).strip()
             if not store:
-                # skip row if store empty
-                if (i % 10 == 0) or (i == total):
-                    pbar.progress(min(i / (total or 1), 1.0), text=f"Παράλειψη γραμμής {i} (κενό store)")
+                pbar.progress(min(i / (total or 1), 1.0), text=f"Παράλειψη γραμμής {i} (κενό store)")
                 continue
-
             store_up = store.upper()
 
             # BEX flag
             if bex_mode == "Λίστα (comma-separated)":
                 is_bex = store_up in bex_list
             else:
-                bex_val = str(cell(row, col_bex)).strip().lower() if col_bex else "no"
-                is_bex = bex_val in ("yes", "y", "1", "true", "ναι")
+                bex_val = cell(row, col_bex) if col_bex else ""
+                is_bex = truthy(bex_val)
 
             mapping = {
                 "title": f"Review September 2025 — Plan October 2025 — {store_up}",
                 "store": store_up,
+                "plan_month": plan_month,
+
+                "plan_vs_target": fmt_percent(cell(row, col_plan_vs)),
                 "mobile_actual":  cell(row, col_mob_act),
                 "mobile_target":  cell(row, col_mob_tgt),
                 "fixed_actual":   cell(row, col_fix_act),
                 "fixed_target":   cell(row, col_fix_tgt),
-                "pending_mobile": cell(row, col_pend_mob),
-                "pending_fixed":  cell(row, col_pend_fix),
-                "plan_vs_target": cell(row, col_plan_vs),
+
+                "voice_vs_target": fmt_percent(cell(row, col_voice_vs)),
+                "fixed_vs_target": fmt_percent(cell(row, col_fixed_vs)),
+
+                "llu_actual":  cell(row, col_llu),
+                "nga_actual":  cell(row, col_nga),
+                "ftth_actual": cell(row, col_ftth),
+                "eon_tv_actual": cell(row, col_eon),
+                "fwa_actual":  cell(row, col_fwa),
+
+                "mobile_upgrades": cell(row, col_mob_upg),
+                "fixed_upgrades":  cell(row, col_fix_upg),
+
+                "pending_mobile": cell(row, col_pend_m),
+                "pending_fixed":  cell(row, col_pend_f),
             }
 
-            # build docx
             doc = Document(io.BytesIO(tpl_bex_bytes if is_bex else tpl_nonbex_bytes))
             set_default_font(doc, "Aptos")
             replace_placeholders(doc, mapping)
@@ -336,8 +378,7 @@ if run:
             zf.writestr(out_name, buf.getvalue())
             built += 1
 
-            if (i % 10 == 0) or (i == total):
-                pbar.progress(min(i / (total or 1), 1.0), text=f"Φτιάχνω: {out_name} ({min(i, total)}/{total})")
+            pbar.progress(min(i / (total or 1), 1.0), text=f"Φτιάχνω: {out_name} ({min(i, total)}/{total})")
 
         except Exception as e:
             st.warning(f"⚠️ Σφάλμα στη γραμμή {i}: {e}")
