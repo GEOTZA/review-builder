@@ -1,4 +1,4 @@
-# app.py
+f# app.py
 # Streamlit: Excel/CSV -> (BEX / Non-BEX) Review-Plan .docx (ZIP)
 # Author: GEOTZA + Nova helper
 
@@ -135,6 +135,18 @@ if run:
         st.stop()
 
     st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
+    import pandas as pd
+
+# Φόρτωση Excel για να δούμε τις κεφαλίδες
+xls_path = "sheet1.xlsx"
+
+xfile = pd.ExcelFile(xls_path, engine="openpyxl")
+print("📑 Sheets:", xfile.sheet_names)
+
+df = pd.read_excel(xfile, sheet_name=xfile.sheet_names[0])
+print("🔍 Headers:")
+print(list(df.columns))
+
     if debug_mode:
         st.dataframe(df.head(10))
 
