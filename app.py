@@ -141,7 +141,7 @@ if run:
     cols = list(df.columns)
 
     # Auto-map βασισμένο στα headers
-   col_store = pick(cols, "Shop Code", "Shop_Code", "ShopCode", "Shop code", "STORE", "Κατάστημα",
+    col_store = pick(cols, "Shop Code", "Shop_Code", "ShopCode", "Shop code", "STORE", "Κατάστημα",
                  "shop", "store", "code καταστήματος", "ΚΩΔΙΚΟΣ ΚΑΤΑΣΤΗΜΑΤΟΣ", r"shop.?code")
     col_bex      = pick(cols, "BEX store", "BEX", r"bex.?store")
     col_mob_act  = pick(cols, "mobile actual", r"mobile.*actual")
