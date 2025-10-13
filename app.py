@@ -84,7 +84,20 @@ st.title("📄 Nova Letters — Μαζική Παραγωγή (BEX / NON-BEX)")
 
 # Mapping & Template
 st.subheader("1) Mapping & Template")
+st.markdown("**(Προαιρετικά) Ξεχωριστά templates ανά κατηγορία**")
+tpl_bex_up = st.file_uploader("Upload BEX template (.docx)", type=["docx"], key="tpl_bex")
+tpl_nonbex_up = st.file_uploader("Upload NON-BEX template (.docx)", type=["docx"], key="tpl_nonbex")
 
+tpl_bex_path = None
+tpl_nonbex_path = None
+if tpl_bex_up:
+    (RUNTIME / "bex_template.docx").write_bytes(tpl_bex_up.getvalue())
+    tpl_bex_path = RUNTIME / "bex_template.docx"
+    st.success("✔ BEX template uploaded.")
+if tpl_nonbex_up:
+    (RUNTIME / "nonbex_template.docx").write_bytes(tpl_nonbex_up.getvalue())
+    tpl_nonbex_path = RUNTIME / "nonbex_template.docx"
+    st.success("✔ NON-BEX template uploaded.")
 c1, c2 = st.columns(2)
 
 with c1:
