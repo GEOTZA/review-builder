@@ -127,6 +127,7 @@ df = None
 if excel is not None:
     try:
         df = pd.read_excel(excel, sheet_name=sheet or 0)
+        df.columns = [c.strip().lower() for c in df.columns]
         st.success(f"Φορτώθηκαν {len(df)} γραμμές από Excel.")
         st.write("**Preview των values που θα περάσουν:**")
         st.dataframe(df, use_container_width=True)
