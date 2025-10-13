@@ -155,6 +155,44 @@ df = None
 if excel is not None:
     try:
         df = pd.read_excel(excel, sheet_name=sheet or 0)
+        # --- Normalize & alias headers ώστε να βρίσκουμε πάντα το store_code ---
+import re, unicodedata
+
+def _norm(s):
+    # κατεβάζουμε σε ASCII, κόβουμε τόνους/διακριτικά, lower, και κάνουμε underscores
+    s = unicodedata.normalize('NFKD', str(s)).encode('ascii','ignore').decode('ascii')
+    s = s.strip().lower()
+    s = re.sub(r'[^a-z0-9]+', '_', s)  # spaces, dashes, dots -> _
+    return s.strip('_')
+
+orig_cols = list(df.columns)
+df.columns = [_norm(c) for c in df.columns]
+
+# Αντιστοιχήσεις που γυρίζουν σε store_code
+aliases = {
+    "store": "store_code",
+    "storeid": "store_code",
+    "store_id": "store_code",
+    "code": "store_code",
+    "dealer": "store_code",
+    "dealerid": "store_code",
+    "dealer_id": "store_code",
+    "dealercode": "store_code",
+    "dealer_code": "store_code",
+    "dealer_code_id": "store_code",
+    "dealer_code_number": "store_code",
+    "kvdikos_katastimatos": "store_code",     # πρόχειρη λατινοποίηση
+    "kvvdikos": "store_code",
+}
+
+if "store_code" not in df.columns:
+    for k, v in aliases.items():
+        if k in df.columns:
+            df.rename(columns={k: v}, inplace=True)
+            break
+
+# Debug info στο UI για να βλέπεις τι headers είδε
+st.caption(f"Headers (normalized): {list(df.columns)}")
         df.columns = [c.strip().lower() for c in df.columns]
         st.success(f"Φορτώθηκαν {len(df)} γραμμές από Excel.")
         st.write("**Preview των values που θα περάσουν:**")
