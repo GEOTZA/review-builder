@@ -1,6 +1,6 @@
 import streamlit as st
 from pathlib import Path
-import json, datetime, io, zipfile
+import json, datetime, io, zipfile, re, unicodedata
 from typing import Any, Dict
 
 try:
@@ -65,7 +65,7 @@ def build_placeholder_map(store_code: str, store_name: str, payload: Dict[str, A
         "pending_mobile": payload.get("pending_mobile", ""),
         "voice_vs_target_pct": format_percent(payload.get("voice_vs_target", "")),
     }
-    # Επίσης περνάμε *όλα* τα υπόλοιπα columns ως [[column_name]]
+    # Πέρνα και όλα τα υπόλοιπα columns ως [[column_name]]
     for k, v in payload.items():
         if k not in out:
             out[k] = v
@@ -76,29 +76,36 @@ def pick_template_path(template_name: str,
                        uploaded_template: Path | None,
                        tpl_bex: Path | None,
                        tpl_nonbex: Path | None) -> Path:
-    # 1) Αν υπάρχει uploaded "custom template" για όλους, προέχει
+    # 1) Global uploaded template για όλους
     if uploaded_template and uploaded_template.exists():
         return uploaded_template
-
-    # 2) Αν υπάρχει κατηγορία και έχουν ανέβει category templates, χρησιμοποίησέ τα
+    # 2) Category templates
     cat = (category or "NON_BEX").upper()
     if cat == "BEX" and tpl_bex and tpl_bex.exists():
         return tpl_bex
     if cat != "BEX" and tpl_nonbex and tpl_nonbex.exists():
         return tpl_nonbex
-
-    # 3) Αν στο mapping έχει template_name, ψάξ’ το στον φάκελο templates/
+    # 3) Per-store template από mapping (στο templates/)
     cand = TEMPLATES_DIR / (template_name or "default.docx")
     if cand.exists():
         return cand
+    # 4) Fallback
+    return DEFAULT_TEMPLATE
 
-    # 4) Fallback: default.docx
-    return DEFAULT_TEMPLATE 
+def _norm_header(s: str) -> str:
+    """normalize headers: remove accents/greek, lowercase, underscores"""
+    s = unicodedata.normalize('NFKD', str(s)).encode('ascii', 'ignore').decode('ascii')
+    s = s.strip().lower()
+    s = re.sub(r'[^a-z0-9]+', '_', s)
+    return s.strip('_')
+
 # ---------- UI ----------
 st.title("📄 Nova Letters — Μαζική Παραγωγή (BEX / NON-BEX)")
 
 # Mapping & Template
 st.subheader("1) Mapping & Template")
+
+# (Προαιρετικά) ξεχωριστά templates ανά κατηγορία
 st.markdown("**(Προαιρετικά) Ξεχωριστά templates ανά κατηγορία**")
 tpl_bex_up = st.file_uploader("Upload BEX template (.docx)", type=["docx"], key="tpl_bex")
 tpl_nonbex_up = st.file_uploader("Upload NON-BEX template (.docx)", type=["docx"], key="tpl_nonbex")
@@ -113,6 +120,7 @@ if tpl_nonbex_up:
     (RUNTIME / "nonbex_template.docx").write_bytes(tpl_nonbex_up.getvalue())
     tpl_nonbex_path = RUNTIME / "nonbex_template.docx"
     st.success("✔ NON-BEX template uploaded.")
+
 c1, c2 = st.columns(2)
 
 with c1:
@@ -132,18 +140,17 @@ with c1:
         st.error("Missing store_mapping.json")
 
 with c2:
-    st.markdown("**Template (.docx)** (repo ή ανέβασέ το)")
-    t_up = st.file_uploader("Upload template .docx", type=["docx"])
+    st.markdown("**Default template (.docx)** (repo ή ανέβασέ το)")
+    t_up = st.file_uploader("Upload default template .docx", type=["docx"])
     uploaded_template = None
     if t_up:
         (RUNTIME / "custom_template.docx").write_bytes(t_up.getvalue())
         uploaded_template = RUNTIME / "custom_template.docx"
         st.success("Uploaded to runtime/custom_template.docx")
-    else:
-        uploaded_template = None
     if DEFAULT_TEMPLATE.exists():
-        st.info("Repo default template: templates/default.docx")
+        st.info("Repo default: templates/default.docx")
 
+# Δεδομένα (Excel)
 st.subheader("2) Δεδομένα — Excel (1 γραμμή ανά κατάστημα)")
 if pd is None:
     st.error("Λείπει pandas/openpyxl. Πρόσθεσε στο requirements.txt: pandas, openpyxl")
@@ -155,79 +162,41 @@ df = None
 if excel is not None:
     try:
         df = pd.read_excel(excel, sheet_name=sheet or 0)
-        # --- Normalize & alias headers ώστε να βρίσκουμε πάντα το store_code ---
-import re, unicodedata
 
-def _norm(s):
-    # κατεβάζουμε σε ASCII, κόβουμε τόνους/διακριτικά, lower, και κάνουμε underscores
-    s = unicodedata.normalize('NFKD', str(s)).encode('ascii','ignore').decode('ascii')
-    s = s.strip().lower()
-    s = re.sub(r'[^a-z0-9]+', '_', s)  # spaces, dashes, dots -> _
-    return s.strip('_')
+        # --- Normalize headers & aliasing ώστε να βρίσκουμε πάντα το store_code ---
+        orig_cols = list(df.columns)
+        df.columns = [_norm_header(c) for c in df.columns]
 
-orig_cols = list(df.columns)
-df.columns = [_norm(c) for c in df.columns]
+        aliases = {
+            "store": "store_code",
+            "storeid": "store_code",
+            "store_id": "store_code",
+            "code": "store_code",
+            "dealer": "store_code",
+            "dealerid": "store_code",
+            "dealer_id": "store_code",
+            "dealercode": "store_code",
+            "dealer_code": "store_code",
+            "dealer_code_id": "store_code",
+            "dealer_code_number": "store_code",
+            "dealercodeid": "store_code",
+        }
+        if "store_code" not in df.columns:
+            for k, v in aliases.items():
+                if k in df.columns:
+                    df.rename(columns={k: v}, inplace=True)
+                    break
 
-# Αντιστοιχήσεις που γυρίζουν σε store_code
-aliases = {
-    "store": "store_code",
-    "storeid": "store_code",
-    "store_id": "store_code",
-    "code": "store_code",
-    "dealer": "store_code",
-    "dealerid": "store_code",
-    "dealer_id": "store_code",
-    "dealercode": "store_code",
-    "dealer_code": "store_code",
-    "dealer_code_id": "store_code",
-    "dealer_code_number": "store_code",
-    "kvdikos_katastimatos": "store_code",     # πρόχειρη λατινοποίηση
-    "kvvdikos": "store_code",
-}
+        st.caption(f"Headers (original): {orig_cols}")
+        st.caption(f"Headers (normalized): {list(df.columns)}")
 
-if "store_code" not in df.columns:
-    for k, v in aliases.items():
-        if k in df.columns:
-            df.rename(columns={k: v}, inplace=True)
-            break
-
-# Debug info στο UI για να βλέπεις τι headers είδε
-st.caption(f"Headers (normalized): {list(df.columns)}")
-        # --- Normalize & alias headers ώστε να βρίσκουμε πάντα το store_code ---
-
-
-# Αντιστοιχήσεις που γυρίζουν σε store_code
-aliases = {
-    "store": "store_code",
-    "storeid": "store_code",
-    "store_id": "store_code",
-    "code": "store_code",
-    "dealer": "store_code",
-    "dealerid": "store_code",
-    "dealer_id": "store_code",
-    "dealercode": "store_code",
-    "dealer_code": "store_code",
-    "dealer_code_id": "store_code",
-    "dealer_code_number": "store_code",
-    "kvdikos_katastimatos": "store_code",     # πρόχειρη λατινοποίηση
-    "kvvdikos": "store_code",
-}
-
-if "store_code" not in df.columns:
-    for k, v in aliases.items():
-        if k in df.columns:
-            df.rename(columns={k: v}, inplace=True)
-            break
-
-# Debug info στο UI για να βλέπεις τι headers είδε
-st.caption(f"Headers (normalized): {list(df.columns)}")
-        df.columns = [c.strip().lower() for c in df.columns]
         st.success(f"Φορτώθηκαν {len(df)} γραμμές από Excel.")
         st.write("**Preview των values που θα περάσουν:**")
         st.dataframe(df, use_container_width=True)
     except Exception as e:
         st.error(f"Σφάλμα ανάγνωσης Excel: {e}")
 
+# Παραγωγή
 st.subheader("3) Παραγωγή ανά κατάστημα & ομαδοποίηση")
 start = st.button("🚀 Generate BEX / NON-BEX & κατέβασέ τα σε ZIP")
 
@@ -253,7 +222,7 @@ if start:
     errors = []
 
     for idx, row in df.iterrows():
-        row_dict = {k: ("" if pd.isna(v) else v) for k, v in row.to_dict().items()}
+        row_dict = {k: ("" if (pd.isna(v) if pd is not None else v is None) else v) for k, v in row.to_dict().items()}
 
         store_code = str(row_dict.get("store_code", "")).strip()
         if not store_code:
@@ -263,22 +232,24 @@ if start:
         info = store_map.get(store_code, store_map.get("_default", {}))
         store_name = info.get("store_name", store_code)
         template_name = info.get("template", "default.docx")
-        category = info.get("category", "NON_BEX")  # default grouping
+        category = info.get("category", "NON_BEX")
 
-        # template pick
-        t_path = pick_template_path(template_name, uploaded_template)
+        # Αν το Excel έχει στήλη category, προέχει
+        if "category" in row_dict and str(row_dict["category"]).strip():
+            category = str(row_dict["category"]).strip()
+
+        # Επιλογή template (global uploaded / per-category / per-store / default)
+        t_path = pick_template_path(template_name, category, uploaded_template, tpl_bex_path, tpl_nonbex_path)
         if not t_path or not t_path.exists():
             errors.append((store_code, f"Template not found: {t_path}"))
             continue
 
-        # placeholders
         placeholders = build_placeholder_map(store_code, store_name, row_dict)
 
-        # build doc
         try:
             doc = Document(str(t_path))
             replace_all(doc, placeholders)
-            # save to zip path: BEX/Letter_FKM01.docx ή NON_BEX/Letter_DRZ01.docx
+
             subdir = "BEX" if str(category).upper() == "BEX" else "NON_BEX"
             out_name = f"{subdir}/Letter_{store_code}.docx"
             buf = io.BytesIO()
