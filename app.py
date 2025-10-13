@@ -1,18 +1,9 @@
-
-"""
-Nova Letters & Templates Generator (stable fallback build)
-- Reads store_mapping.json
-- Loads the correct Word template from ./templates/
-- Replaces [[placeholders]] safely (paragraphs & tables)
-- Accepts metrics from JSON or Excel (by column HEADERS, not letters)
-- Formats percentages: 1.22 -> 122%, 0.85 -> 85%, 122 -> 122%
-Usage (CLI):
-  python app.py --store FKM01 --data data.json --out out_dir
-  python app.py --store FKM01 --excel metrics.xlsx --sheet Sheet1 --out out_dir
-"""
-
-import os, sys, json, argparse, datetime
+# app.py — Streamlit έκδοση (runs in Streamlit Cloud)
+import streamlit as st
+from pathlib import Path
+import json, datetime, io
 from typing import Any, Dict
+
 try:
     import pandas as pd
 except Exception:
@@ -20,20 +11,18 @@ except Exception:
 
 from docx import Document
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-TEMPLATES_DIR = os.path.join(HERE, "templates")
-MAPPING_FILE = os.path.join(HERE, "store_mapping.json")
+st.set_page_config(page_title="Nova Letters Generator", layout="wide")
 
-# ---------- helpers ----------
+HERE = Path(__file__).parent
+RUNTIME = HERE / "runtime"
+RUNTIME.mkdir(exist_ok=True)
+TEMPLATES_DIR = HERE / "templates"
+DEFAULT_TEMPLATE = TEMPLATES_DIR / "default.docx"
+REPO_MAPPING = HERE / "store_mapping.json"
+REPO_DATA = HERE / "data.json"
 
+# ---------------- helpers ----------------
 def format_percent(x: Any) -> str:
-    """Formats a value to a percentage string.
-    Rules:
-    - if 0 <= x < 1  -> x*100 (0.85 -> 85%)
-    - if 1 <= x < 10 -> x*100 (1.22 -> 122%)
-    - if x >= 10     -> assume already in percent (122 -> 122%)
-    Non-numeric -> returns as-is.
-    """
     try:
         val = float(x)
     except Exception:
@@ -43,9 +32,8 @@ def format_percent(x: Any) -> str:
     if val < 10:
         return f"{val*100:.0f}%"
     return f"{val:.0f}%"
-    
-def replace_all(doc: Document, mapping: Dict[str, str]) -> None:
-    """Replace [[placeholder]] in paragraphs and tables."""
+
+def replace_all(doc: Document, mapping: Dict[str, Any]) -> None:
     def repl_text(text: str) -> str:
         out = text
         for k, v in mapping.items():
@@ -54,87 +42,167 @@ def replace_all(doc: Document, mapping: Dict[str, str]) -> None:
 
     for p in doc.paragraphs:
         p.text = repl_text(p.text)
-
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 cell.text = repl_text(cell.text)
 
-def load_store_mapping() -> Dict[str, Any]:
-    if not os.path.exists(MAPPING_FILE):
-        raise FileNotFoundError(f"Missing mapping file: {MAPPING_FILE}")
-    with open(MAPPING_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def select_template(store_code: str, store_map: Dict[str, Any]) -> (str, str):
-    info = store_map.get(store_code, store_map.get("_default", {}))
-    template_name = info.get("template", "default.docx")
-    store_name = info.get("store_name", store_code)
-    template_path = os.path.join(TEMPLATES_DIR, template_name)
-    if not os.path.exists(template_path):
-        raise FileNotFoundError(f"Template not found: {template_path}")
-    return template_path, store_name
-
-def read_metrics_from_excel(path: str, sheet: str) -> Dict[str, Any]:
-    if pd is None:
-        raise RuntimeError("pandas is required for Excel. Install pandas/openpyxl.")
-    df = pd.read_excel(path, sheet_name=sheet)
-    # Expect headers matching keys; we take the first row.
-    row = df.iloc[0].to_dict()
-    return {k: row.get(k) for k in df.columns}
-
 def build_placeholder_map(store_code: str, store_name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     today = datetime.date.today()
-    mm = today.strftime("%B")
-    placeholders = {
+    return {
         "store_code": store_code,
         "store_name": store_name,
-        "month_name": mm,
+        "month_name": today.strftime("%B"),
         "year": today.year,
         "comment": payload.get("comment", ""),
-        # numbers:
         "fixed_target": payload.get("fixed_target", ""),
         "fixed_actual": payload.get("fixed_actual", ""),
         "ftth_actual": payload.get("ftth_actual", ""),
         "eon_tv_actual": payload.get("eon_tv_actual", ""),
         "mobile_upgrades": payload.get("mobile_upgrades", ""),
         "pending_mobile": payload.get("pending_mobile", ""),
+        "voice_vs_target_pct": format_percent(payload.get("voice_vs_target", "")),
     }
-    # Percent-derived:
-    placeholders["voice_vs_target_pct"] = format_percent(payload.get("voice_vs_target", ""))
-    return placeholders
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--store", required=True, help="Store code, e.g., FKM01")
-    ap.add_argument("--data", help="Path to JSON with metrics")
-    ap.add_argument("--excel", help="Path to Excel with headers matching keys")
-    ap.add_argument("--sheet", default=None, help="Excel sheet name")
-    ap.add_argument("--out", default="out", help="Output directory")
-    args = ap.parse_args()
+def load_store_mapping(path: Path) -> Dict[str, Any]:
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
 
-    store_map = load_store_mapping()
-    template_path, store_name = select_template(args.store, store_map)
+def read_metrics_from_excel(buf, sheet_name=None) -> Dict[str, Any]:
+    if pd is None:
+        raise RuntimeError("pandas/openpyxl not installed. Add them in requirements.txt")
+    df = pd.read_excel(buf, sheet_name=sheet_name or 0)
+    row = df.iloc[0].to_dict()
+    return {k: row.get(k) for k in df.columns}
 
-    # load payload
-    payload = {}
-    if args.data and os.path.exists(args.data):
-        with open(args.data, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-    elif args.excel and os.path.exists(args.excel):
-        payload = read_metrics_from_excel(args.excel, args.sheet or 0)
+# ---------------- UI ----------------
+st.title("📄 Nova Letters Generator")
+
+# 1) Mapping & Template
+st.subheader("1) Mapping & Template")
+c1, c2 = st.columns(2)
+
+with c1:
+    st.markdown("**store_mapping.json** (repo ή ανέβασέ το)")
+    m_up = st.file_uploader("Upload store_mapping.json", type=["json"])
+    if m_up:
+        (RUNTIME / "store_mapping.json").write_bytes(m_up.getvalue())
+        st.success("Uploaded to runtime/store_mapping.json")
+    if (RUNTIME / "store_mapping.json").exists():
+        mapping_path = RUNTIME / "store_mapping.json"
+        st.info("Using uploaded mapping (runtime).")
+    elif REPO_MAPPING.exists():
+        mapping_path = REPO_MAPPING
+        st.info("Using mapping from repo.")
     else:
-        print("No data source provided; using empty placeholders.")
+        mapping_path = None
+        st.error("Missing store_mapping.json")
 
-    placeholders = build_placeholder_map(args.store, store_name, payload)
+with c2:
+    st.markdown("**Template (.docx)** (repo ή ανέβασέ το)")
+    t_up = st.file_uploader("Upload template .docx", type=["docx"])
+    if t_up:
+        (RUNTIME / "custom_template.docx").write_bytes(t_up.getvalue())
+        st.success("Uploaded to runtime/custom_template.docx")
+    if (RUNTIME / "custom_template.docx").exists():
+        template_path = RUNTIME / "custom_template.docx"
+        st.info("Using uploaded template (runtime).")
+    elif DEFAULT_TEMPLATE.exists():
+        template_path = DEFAULT_TEMPLATE
+        st.info("Using templates/default.docx from repo.")
+    else:
+        template_path = None
+        st.error("Missing template .docx")
 
-    # generate
-    os.makedirs(args.out, exist_ok=True)
-    out_path = os.path.join(args.out, f"Letter_{args.store}.docx")
-    doc = Document(template_path)
-    replace_all(doc, placeholders)
-    doc.save(out_path)
-    print(f"OK: created {out_path}")
+# 2) Data
+st.subheader("2) Δεδομένα")
+tab_json, tab_excel, tab_form = st.tabs(["JSON", "Excel", "Φόρμα"])
+payload = {}
 
-if __name__ == "__main__":
-    main()
+with tab_json:
+    d_up = st.file_uploader("Upload data.json (ή θα διαβαστεί του repo)", type=["json"])
+    if d_up:
+        payload = json.loads(d_up.getvalue().decode("utf-8"))
+        st.success("Loaded data from uploaded JSON.")
+    elif REPO_DATA.exists():
+        payload = json.loads(REPO_DATA.read_text(encoding="utf-8"))
+        st.info("Loaded data from repo/data.json.")
+    else:
+        st.warning("No JSON provided.")
+
+with tab_excel:
+    e_up = st.file_uploader("Upload Excel (headers = keys)", type=["xlsx", "xls"])
+    sheet = st.text_input("Sheet name (optional)", value="")
+    if e_up is not None:
+        try:
+            payload = read_metrics_from_excel(e_up, sheet or None)
+            st.success("Loaded data from Excel (first row).")
+        except Exception as e:
+            st.error(f"Excel error: {e}")
+
+with tab_form:
+    with st.form("manual"):
+        fixed_target = st.text_input("fixed_target")
+        fixed_actual = st.text_input("fixed_actual")
+        voice_vs_target = st.text_input("voice_vs_target (0.85 ή 1.22 ή 122)")
+        ftth_actual = st.text_input("ftth_actual")
+        eon_tv_actual = st.text_input("eon_tv_actual")
+        mobile_upgrades = st.text_input("mobile_upgrades")
+        pending_mobile = st.text_input("pending_mobile")
+        comment = st.text_input("comment")
+        ok = st.form_submit_button("Use form values")
+    if ok:
+        payload = {
+            "fixed_target": fixed_target,
+            "fixed_actual": fixed_actual,
+            "voice_vs_target": voice_vs_target,
+            "ftth_actual": ftth_actual,
+            "eon_tv_actual": eon_tv_actual,
+            "mobile_upgrades": mobile_upgrades,
+            "pending_mobile": pending_mobile,
+            "comment": comment,
+        }
+        st.success("Loaded data from form.")
+
+# 3) Store & Generate
+st.subheader("3) Κατάστημα & Παραγωγή")
+store_code = st.text_input("Store code (π.χ. FKM01)", value="FKM01")
+
+if st.button("Δημιούργησε Word"):
+    if mapping_path is None:
+        st.error("Λείπει store_mapping.json")
+    elif template_path is None:
+        st.error("Λείπει template .docx")
+    elif not store_code.strip():
+        st.error("Δώσε store code")
+    else:
+        try:
+            store_map = load_store_mapping(mapping_path)
+            info = store_map.get(store_code, store_map.get("_default", {}))
+            template_name = info.get("template", "default.docx")
+            store_name = info.get("store_name", store_code)
+
+            # Αν mapping δείχνει άλλο template στον φάκελο templates/
+            if template_path == DEFAULT_TEMPLATE and template_name != "default.docx":
+                alt = TEMPLATES_DIR / template_name
+                template_path_use = alt if alt.exists() else template_path
+            else:
+                template_path_use = template_path
+
+            doc = Document(str(template_path_use))
+            placeholders = build_placeholder_map(store_code, store_name, payload or {})
+            replace_all(doc, placeholders)
+
+            buf = io.BytesIO()
+            doc.save(buf)
+            buf.seek(0)
+
+            fn = f"Letter_{store_code}.docx"
+            st.success(f"Έτοιμο: {fn}")
+            st.download_button("⬇️ Κατέβασε το Word", data=buf, file_name=fn,
+                               mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        except Exception as e:
+            st.error(f"Σφάλμα: {e}")
+            st.stop()
+
+st.caption("Placeholders στο template με μορφή [[placeholder]] π.χ. [[store_code]], [[voice_vs_target_pct]].")
