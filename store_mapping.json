@@ -1,0 +1,18 @@
+{
+  "FKM01": {
+    "template": "default.docx",
+    "store_name": "Nova FKM01"
+  },
+  "DRZ01": {
+    "template": "default.docx",
+    "store_name": "Nova DRZ01"
+  },
+  "ESC01": {
+    "template": "default.docx",
+    "store_name": "Nova ESC01"
+  },
+  "_default": {
+    "template": "default.docx",
+    "store_name": "Nova Store"
+  }
+}
