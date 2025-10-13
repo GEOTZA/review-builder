@@ -1,0 +1,10 @@
+{
+  "fixed_target": 20,
+  "fixed_actual": 3,
+  "voice_vs_target": 0.15395866187977528,
+  "ftth_actual": 1,
+  "eon_tv_actual": 0,
+  "mobile_upgrades": 7,
+  "pending_mobile": 23,
+  "comment": "Προτεραιότητα σε FTTH & SME ραντεβού."
+}
