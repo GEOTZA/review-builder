@@ -156,7 +156,7 @@ if excel is not None:
     try:
         df = pd.read_excel(excel, sheet_name=sheet or 0)
         # --- Normalize & alias headers ώστε να βρίσκουμε πάντα το store_code ---
-import re, unicodedata
+import unicodedata
 
 def _norm(s):
     # κατεβάζουμε σε ASCII, κόβουμε τόνους/διακριτικά, lower, και κάνουμε underscores
