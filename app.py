@@ -15,6 +15,36 @@ st.set_page_config(page_title="Excel → Review/Plan Generator", layout="wide")
 st.title("📊 Excel/CSV → 📄 Review/Plan Generator (BEX & Non-BEX)")
 
 # ───────────── Helpers ─────────────
+def iter_all_paragraphs_and_cells(doc: Document):
+    # σώμα
+    for p in doc.paragraphs:
+        yield p
+    for t in doc.tables:
+        for row in t.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    yield p
+    # headers/footers
+    for section in doc.sections:
+        for part in [section.header, section.first_page_header, section.even_page_header,
+                     section.footer, section.first_page_footer, section.even_page_footer]:
+            if not part:
+                continue
+            for p in part.paragraphs:
+                yield p
+            for t in part.tables:
+                for row in t.rows:
+                    for cell in row.cells:
+                        for p in cell.paragraphs:
+                            yield p
+
+def find_placeholders_in_docx(doc: Document) -> set[str]:
+    found = set()
+    for p in iter_all_paragraphs_and_cells(doc):
+        text = "".join(run.text for run in p.runs) or p.text or ""
+        for m in PH_RE.finditer(text):
+            found.add(m.group(1))
+    return found
 PH_RE = re.compile(r"\[\[([A-Za-z0-9_]+)\]\]")
 
 BEX_DEFAULT = {"DRZ01", "FKM01", "ESC01", "LND01", "PKK01"}
@@ -226,7 +256,69 @@ if run:
     # Έλεγχος πλήθους
     total = len(df) if not test_mode else min(50, len(df))
     pbar = st.progress(0, text="Δημιουργία εγγράφων…")
+# ---- Template audit (εμφάνιση placeholders & mismatch) ----
+with st.expander("🔎 Template audit (placeholders που βρέθηκαν στο .docx)"):
+    doc_bex    = Document(io.BytesIO(tpl_bex_bytes))
+    doc_nonbex = Document(io.BytesIO(tpl_nonbex_bytes))
+    ph_bex     = find_placeholders_in_docx(doc_bex)
+    ph_nonbex  = find_placeholders_in_docx(doc_nonbex)
+    st.write("BEX placeholders:", sorted(ph_bex))
+    st.write("Non-BEX placeholders:", sorted(ph_nonbex))
 
+    expected = {
+        "title","plan_month","store","bex",
+        "plan_vs_target","mobile_actual","mobile_target","fixed_target","fixed_actual",
+        "voice_vs_target","fixed_vs_target",
+        "llu_actual","nga_actual","ftth_actual","eon_tv_actual","fwa_actual",
+        "mobile_upgrades","fixed_upgrades","pending_mobile","pending_fixed",
+    }
+    st.warning("⚠️ Missing (BEX): " + ", ".join(sorted(expected - ph_bex)) or "—")
+    st.warning("⚠️ Missing (Non-BEX): " + ", ".join(sorted(expected - ph_nonbex)) or "—")
+    extra_bex    = ph_bex - expected
+    extra_nonbex = ph_nonbex - expected
+    if extra_bex:
+        st.info("ℹ️ Επιπλέον (BEX): " + ", ".join(sorted(extra_bex)))
+    if extra_nonbex:
+        st.info("ℹ️ Επιπλέον (Non-BEX): " + ", ".join(sorted(extra_nonbex)))
+
+# ---- Sample mapping από τη 2η γραμμή για οπτικό έλεγχο ----
+with st.expander("🧪 Mapping preview (από 2η γραμμή)"):
+    if len(df) >= 2:
+        row = df.iloc[1]  # δεύτερη γραμμή Excel
+        store_val = (str(row[col_store]).strip() if col_store else "") or str(val_by_letter(row, letter_store)).strip()
+        store_up = store_val.upper() if store_val else "(empty)"
+
+        if bex_mode.startswith("Σταθερή"):
+            is_bex = store_up in (bex_list or BEX_DEFAULT)
+        else:
+            raw_bex = str(val_by_letter(row, bex_letter)).strip().lower()
+            is_bex = raw_bex in {"yes", "y", "1", "true", "ναι"}
+
+        preview_map = {
+            "title":      f"Review September 2025 — Plan October 2025 — {store_up}",
+            "plan_month": "Review September 2025 → Plan October 2025",
+            "store":      store_up,
+            "bex":        "YES" if is_bex else "NO",
+            "plan_vs_target":  fmt_percent(val_by_letter(row, letter_plan_vs)),
+            "mobile_actual":   val_by_letter(row, letter_mobile_act),
+            "mobile_target":   val_by_letter(row, letter_mobile_tgt),
+            "fixed_target":    val_by_letter(row, letter_fixed_tgt),
+            "fixed_actual":    val_by_letter(row, letter_fixed_act),
+            "voice_vs_target": fmt_percent(val_by_letter(row, letter_voice_vs)),
+            "fixed_vs_target": fmt_percent(val_by_letter(row, letter_fixed_vs)),
+            "llu_actual":      val_by_letter(row, letter_llu),
+            "nga_actual":      val_by_letter(row, letter_nga),
+            "ftth_actual":     val_by_letter(row, letter_ftth),
+            "eon_tv_actual":   val_by_letter(row, letter_eon_tv),
+            "fwa_actual":      val_by_letter(row, letter_fwa),
+            "mobile_upgrades": val_by_letter(row, letter_mob_upg),
+            "fixed_upgrades":  val_by_letter(row, letter_fix_upg),
+            "pending_mobile":  val_by_letter(row, letter_pend_mob),
+            "pending_fixed":   val_by_letter(row, letter_pend_fix),
+        }
+        st.json(preview_map)
+    else:
+        st.write("Το αρχείο έχει μόνο 1 γραμμή.")
     for i, (_, row) in enumerate(df.iterrows(), start=1):
         if test_mode and i > total:
             st.info(f"🧪 Test mode: σταμάτησα στις {total} γραμμές.")
