@@ -1,4 +1,4 @@
-λ# app.py
+# app.py
 # Streamlit: Excel -> (BEX / Non-BEX) Review-Plan .docx (ZIP)
 
 import io
