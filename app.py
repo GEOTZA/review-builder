@@ -71,14 +71,29 @@ def build_placeholder_map(store_code: str, store_name: str, payload: Dict[str, A
             out[k] = v
     return out
 
-def pick_template_path(template_name: str, uploaded_template: Path | None) -> Path:
-    # Αν υπάρχει uploaded custom template, δώσε προτεραιότητα
+def pick_template_path(template_name: str,
+                       category: str | None,
+                       uploaded_template: Path | None,
+                       tpl_bex: Path | None,
+                       tpl_nonbex: Path | None) -> Path:
+    # 1) Αν υπάρχει uploaded "custom template" για όλους, προέχει
     if uploaded_template and uploaded_template.exists():
         return uploaded_template
-    # αλλιώς ψάξε στο templates/
-    cand = TEMPLATES_DIR / (template_name or "default.docx")
-    return cand if cand.exists() else DEFAULT_TEMPLATE
 
+    # 2) Αν υπάρχει κατηγορία και έχουν ανέβει category templates, χρησιμοποίησέ τα
+    cat = (category or "NON_BEX").upper()
+    if cat == "BEX" and tpl_bex and tpl_bex.exists():
+        return tpl_bex
+    if cat != "BEX" and tpl_nonbex and tpl_nonbex.exists():
+        return tpl_nonbex
+
+    # 3) Αν στο mapping έχει template_name, ψάξ’ το στον φάκελο templates/
+    cand = TEMPLATES_DIR / (template_name or "default.docx")
+    if cand.exists():
+        return cand
+
+    # 4) Fallback: default.docx
+    return DEFAULT_TEMPLATE 
 # ---------- UI ----------
 st.title("📄 Nova Letters — Μαζική Παραγωγή (BEX / NON-BEX)")
 
