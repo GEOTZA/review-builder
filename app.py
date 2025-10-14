@@ -1,364 +1,360 @@
-# app.py
-# Streamlit: Excel/CSV -> (BEX / Non-BEX) Review/Plan .docx (ZIP)
-
+# app.py — Nova Letters / Review Builder (robust)
 import io
 import re
+import json
 import zipfile
-from typing import Any, Dict, Optional
+import unicodedata
+import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterable, Tuple
 
-import pandas as pd
 import streamlit as st
 from docx import Document
-from docx.oxml.ns import qn
+from docx.text.paragraph import Paragraph
+from docx.table import _Cell as TableCell
 
-# ───────────────────────────── UI CONFIG ─────────────────────────────
-st.set_page_config(page_title="Excel → Review/Plan Generator", layout="wide")
-st.title("📊 Excel/CSV → 📄 Review/Plan Generator (BEX & Non-BEX)")
+try:
+    import pandas as pd  # needs pandas, openpyxl in requirements.txt
+except Exception:
+    pd = None
+
+# ───────────────────────────── CONFIG ─────────────────────────────
+st.set_page_config(page_title="Nova Letters — Batch Builder", layout="wide")
+APP_TITLE = "📄 Nova Letters — Μαζική Παραγωγή (BEX / NON-BEX)"
+
+HERE = Path(__file__).parent
+RUNTIME = HERE / "runtime"
+RUNTIME.mkdir(exist_ok=True)
+
+TEMPLATES_DIR = HERE / "templates"
+DEFAULT_TEMPLATE = TEMPLATES_DIR / "default.docx"
+REPO_MAPPING = HERE / "store_mapping.json"  # προαιρετικό json για ονόματα/κατηγορίες/προεπιλογή template
 
 # ───────────────────────────── HELPERS ─────────────────────────────
-PLACEHOLDERS = [
-    "title", "plan_month", "store", "bex",
-    "plan_vs_target", "mobile_actual", "mobile_target",
-    "fixed_target", "fixed_actual",
-    "voice_vs_target", "fixed_vs_target",
-    "llu_actual", "nga_actual", "ftth_actual",
-    "eon_tv_actual", "fwa_actual",
-    "mobile_upgrades", "fixed_upgrades",
-    "pending_mobile", "pending_fixed",
-]
+def _norm_header(s: str) -> str:
+    """Normalize headers: αφαιρεί τόνους/μη ASCII, κατεβάζει πεζά, αντικαθιστά κενά/σύμβολα με _."""
+    s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode("ascii")
+    s = s.strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s)
+    return s.strip("_")
 
-BEX_SET_DEFAULT = {"DRZ01", "FKM01", "ESC01", "LND01", "PKK01"}
+def _is_nan(x: Any) -> bool:
+    try:
+        import math
+        return x is None or (isinstance(x, float) and math.isnan(x))
+    except Exception:
+        return x is None
 
+def _safe_str(x: Any) -> str:
+    if _is_nan(x):
+        return ""
+    return str(x)
 
-def normkey(x: str) -> str:
-    return re.sub(r"[\s\-_\.]+", "", str(x).strip().lower())
-
-
-def a1_to_idx(letter: str) -> int:
-    """Convert Excel column letters (A, Z, AA…) to 0-based index."""
-    s = letter.strip().upper()
-    if not s.isalpha():
-        raise ValueError(f"Not a letter: {letter}")
-    n = 0
-    for ch in s:
-        n = n * 26 + (ord(ch) - 64)
-    return n - 1
-
-
-def get_by_letter(row: pd.Series, letter: Optional[str]) -> Any:
-    if not letter:
+def format_percent(x: Any) -> str:
+    """1.22 -> 122% , 0.87 -> 87% , 87 -> 87%"""
+    if _is_nan(x) or x == "":
         return ""
     try:
-        idx = a1_to_idx(letter)
-        # row is a Series with same ordering as df columns:
-        if idx < 0 or idx >= len(row.index):
-            return ""
-        v = row.iloc[idx]
-        return "" if pd.isna(v) else v
+        val = float(x)
     except Exception:
-        return ""
+        return str(x)
+    # αν είναι < 1 το θεωρούμε αναλογία (0.87 => 87%)
+    if val < 1:
+        return f"{val * 100:.0f}%"
+    # αν είναι μεταξύ 1..10 (π.χ. 1.22 => 122%)
+    if val < 10:
+        return f"{val * 100:.0f}%"
+    # αλλιώς ήδη είναι % (87 => 87%)
+    return f"{val:.0f}%"
 
+def load_store_mapping(path: Path | None) -> Dict[str, Any]:
+    if not path or not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
 
-def set_default_font(doc: Document, font_name: str = "Aptos") -> None:
-    for style in doc.styles:
-        if hasattr(style, "font"):
-            try:
-                style.font.name = font_name
-                style._element.rPr.rFonts.set(qn("w:eastAsia"), font_name)
-                style._element.rPr.rFonts.set(qn("w:cs"), font_name)
-            except Exception:
-                pass
+def pick_template_path(
+    store_template_name: str | None,
+    category: str | None,
+    uploaded_template: Path | None,
+    tpl_bex: Path | None,
+    tpl_nonbex: Path | None,
+) -> Path:
+    # 1) Global uploaded (override για όλους)
+    if uploaded_template and uploaded_template.exists():
+        return uploaded_template
+    # 2) Category specific
+    cat = (category or "NON_BEX").upper()
+    if cat == "BEX" and tpl_bex and tpl_bex.exists():
+        return tpl_bex
+    if cat != "BEX" and tpl_nonbex and tpl_nonbex.exists():
+        return tpl_nonbex
+    # 3) Per-store template από templates/
+    candidate = TEMPLATES_DIR / (store_template_name or "default.docx")
+    if candidate.exists():
+        return candidate
+    # 4) Fallback
+    return DEFAULT_TEMPLATE
 
+# ---- Placeholder extraction from docx (για audit) ----
+PLACEHOLDER_RE = re.compile(r"\[\[([A-Za-z0-9_]+)\]\]")
 
-def replace_placeholders(doc: Document, mapping: Dict[str, Any]) -> None:
-    pat = re.compile(r"\[\[([A-Za-z0-9_]+)\]\]")
+def extract_placeholders_from_paragraph(p: Paragraph) -> Iterable[str]:
+    # Join full text of paragraph (runs μπορεί να έχουν κόψει τα tokens)
+    text = "".join(run.text for run in p.runs)
+    return (m.group(1) for m in PLACEHOLDER_RE.finditer(text))
 
-    def subfun(s: str) -> str:
-        return pat.sub(lambda m: "" if mapping.get(m.group(1)) is None else str(mapping.get(m.group(1), "")), s)
-
+def extract_placeholders_from_doc(doc: Document) -> set[str]:
+    found: set[str] = set()
     for p in doc.paragraphs:
-        for r in p.runs:
-            r.text = subfun(r.text)
-    for t in doc.tables:
-        for row in t.rows:
+        found.update(extract_placeholders_from_paragraph(p))
+    for tbl in doc.tables:
+        for row in tbl.rows:
             for cell in row.cells:
                 for p in cell.paragraphs:
-                    for r in p.runs:
-                        r.text = subfun(r.text)
+                    found.update(extract_placeholders_from_paragraph(p))
+    return found
 
+# ---- Robust replace across runs ----
+def replace_placeholders_in_paragraph(p: Paragraph, mapping: Dict[str, Any]) -> None:
+    text = "".join(run.text for run in p.runs)
+    if not text:
+        return
+    # κάνουμε replace σε όλο το paragraph text
+    for k, v in mapping.items():
+        text = text.replace(f"[[{k}]]", _safe_str(v))
+    # καθαρίζουμε runs και ξαναγράφουμε ένα run με το αποτέλεσμα
+    for _ in range(len(p.runs) - 1, -1, -1):
+        p.runs[_].clear()  # clear text
+    # δεν υπάρχει επίσημο API για να "αδειάσεις" σωστά, οπότε:
+    p.clear()
+    p.add_run(text)
 
-def read_data(uploaded, sheet_name: str) -> Optional[pd.DataFrame]:
-    """Reads CSV or XLSX. Returns DataFrame or None."""
-    try:
-        fname = getattr(uploaded, "name", "")
-        if fname.lower().endswith(".csv"):
-            df = pd.read_csv(uploaded)
+def replace_all(doc: Document, mapping: Dict[str, Any]) -> None:
+    for p in doc.paragraphs:
+        replace_placeholders_in_paragraph(p, mapping)
+    for tbl in doc.tables:
+        for row in tbl.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    replace_placeholders_in_paragraph(p, mapping)
+
+# ---- Build mapping για ένα store (Excel row) ----
+PERCENT_HINT_SUFFIXES = ("_vs_target", "_pct", "_percent", "_percentage")
+
+def build_placeholder_map(store_code: str, store_name: str, row_dict: Dict[str, Any]) -> Dict[str, Any]:
+    today = datetime.date.today()
+    out: Dict[str, Any] = {
+        "store_code": store_code,
+        "store_name": store_name,
+        "month_name": today.strftime("%B"),
+        "year": today.year,
+        # convenience title/plan_month placeholders (αν τα χρειαστείς στα templates)
+        "title": f"Review {today.strftime('%B %Y')} — Plan {(today.replace(day=1) + datetime.timedelta(days=32)).strftime('%B %Y')}",
+        "plan_month": f"Review {today.strftime('%B %Y')} — Plan {(today.replace(day=1) + datetime.timedelta(days=32)).strftime('%B %Y')}",
+    }
+    # πέρασε ΟΛΕΣ τις στήλες του excel ως [[normalized_header]]
+    for k, v in row_dict.items():
+        if any(k.endswith(suf) for suf in PERCENT_HINT_SUFFIXES):
+            out[k] = format_percent(v)
         else:
-            xfile = pd.ExcelFile(uploaded, engine="openpyxl")
-            if sheet_name and sheet_name not in xfile.sheet_names:
-                st.error(f"Το sheet '{sheet_name}' δεν βρέθηκε. Διαθέσιμα: {xfile.sheet_names}")
-                return None
-            sheet = sheet_name if sheet_name else xfile.sheet_names[0]
-            df = pd.read_excel(xfile, sheet_name=sheet, engine="openpyxl")
+            out[k] = "" if _is_nan(v) else v
+    # επίσης βγάλε και “friendly” percent keys (π.χ. voice_vs_target -> voice_vs_target_pct)
+    for k, v in row_dict.items():
+        if k.endswith("_vs_target"):
+            out[f"{k}_pct"] = format_percent(v)
+    return out
 
-        # ── PATCH: auto-fix duplicate headers ─────────────────────────
-        orig_cols = list(df.columns)
-        if pd.Series(orig_cols).duplicated(keep=False).any():
-            def uniquify(seq):
-                seen = {}
-                out = []
-                for x in seq:
-                    n = seen.get(x, 0)
-                    out.append(x if n == 0 else f"{x}__{n+1}")
-                    seen[x] = n + 1
-                return out
+# ───────────────────────────── UI ─────────────────────────────
+st.title(APP_TITLE)
 
-            new_cols = uniquify(orig_cols)
-            df.columns = new_cols
-            dups = sorted({c for c in orig_cols if orig_cols.count(c) > 1})
-            st.warning(
-                "Excel: Βρέθηκαν διπλότυπες κεφαλίδες και έγιναν auto-rename.\n\n"
-                f"Διπλότυπα: {dups}\n\n"
-                f"Νέα ονόματα (ενδεικτικά): {new_cols[:12]} ..."
-            )
-        # ──────────────────────────────────────────────────────────────
+left, right = st.columns([2, 1])
 
-        return df
-    except Exception as e:
-        st.error(f"Δεν άνοιξε το αρχείο: {e}")
-        return None
+with left:
+    st.subheader("1) Templates & Mapping")
+    tpl_bex_up = st.file_uploader("BEX template (.docx)", type=["docx"], key="tpl_bex")
+    tpl_nonbex_up = st.file_uploader("NON-BEX template (.docx)", type=["docx"], key="tpl_nonbex")
+    default_up = st.file_uploader("Default template για όλους (.docx) — προαιρετικό", type=["docx"], key="tpl_default")
 
+    tpl_bex_path = tpl_nonbex_path = uploaded_default_path = None
+    if tpl_bex_up:
+        (RUNTIME / "bex.docx").write_bytes(tpl_bex_up.getvalue())
+        tpl_bex_path = RUNTIME / "bex.docx"
+        st.success("✔ Φορτώθηκε BEX template")
+    if tpl_nonbex_up:
+        (RUNTIME / "nonbex.docx").write_bytes(tpl_nonbex_up.getvalue())
+        tpl_nonbex_path = RUNTIME / "nonbex.docx"
+        st.success("✔ Φορτώθηκε NON-BEX template")
+    if default_up:
+        (RUNTIME / "default_uploaded.docx").write_bytes(default_up.getvalue())
+        uploaded_default_path = RUNTIME / "default_uploaded.docx"
+        st.success("✔ Φορτώθηκε Default template")
 
-def fmt_percent(x: Any) -> Any:
-    """If value looks like ratio (e.g., 1.22), turn to 122% string."""
-    try:
-        if x == "" or x is None:
-            return ""
-        xv = float(x)
-        return f"{round(xv * 100)}%"
-    except Exception:
-        return x
-
-
-# ───────────────────────────── SIDEBAR ─────────────────────────────
-with st.sidebar:
-    st.header("Ρυθμίσεις")
-    debug_mode = st.toggle("🛠 Debug mode", value=True)
-    test_mode = st.toggle("🧪 Test mode (πρώτες 50 γραμμές)", value=True)
-
-    st.subheader("Templates (.docx)")
-    tpl_bex = st.file_uploader("BEX template", type=["docx"], key="tpl1")
-    tpl_nonbex = st.file_uploader("Non-BEX template", type=["docx"], key="tpl2")
-    st.caption(
-        "Placeholders στο Word: " +
-        ", ".join([f"[[{k}]]" for k in PLACEHOLDERS])
-    )
-
-st.markdown("### 1) Ανέβασε Excel")
-uploaded = st.file_uploader("Drag and drop file here", type=["xlsx", "csv"])
-sheet_name = st.text_input("Όνομα φύλλου (Sheet - μόνο για Excel)", value="Sheet1")
-
-with st.expander("📌 Ρύθμιση γραμμών (headers & δεδομένα)", expanded=False):
-    st.write("Αν η 1η γραμμή είναι κεφαλίδες, άφησέ το ως έχει. Αλλιώς μπορείς να προσαρμόσεις.")
-    start_row = st.number_input("Πρώτη γραμμή δεδομένων (1-based, default=2)", min_value=1, value=2, step=1)
-
-with st.expander("🏬 STORE & BEX", expanded=True):
-    store_options = st.radio("Πώς διαβάζουμε το STORE;", ["Από κεφαλίδα 'Dealer_Code' / 'Shop Code'", "Από γράμμα στήλης"], index=0)
-    store_letter = ""
-    if store_options == "Από γράμμα στήλης":
-        store_letter = st.text_input("Γράμμα στήλης για STORE (π.χ. A)", value="A")
-
-    bex_mode = st.radio("Πώς βρίσκουμε αν είναι BEX;", ["Λίστα κωδικών", "Από στήλη (YES/NO)"], index=0)
-    bex_from_list = set()
-    bex_yesno_letter = ""
-    if bex_mode == "Λίστα κωδικών":
-        bex_txt = st.text_area("BEXStores (comma-separated)", "DRZ01,FKM01,ESC01,LND01,PKK01")
-        bex_from_list = {s.strip().upper() for s in bex_txt.split(",") if s.strip()}
+    map_up = st.file_uploader("store_mapping.json (προαιρετικό — ονόματα/κατηγορία/template ανά store)", type=["json"])
+    if map_up:
+        (RUNTIME / "store_mapping.json").write_bytes(map_up.getvalue())
+        mapping_path = RUNTIME / "store_mapping.json"
+        st.info("Χρησιμοποιείται το ανεβασμένο store_mapping.json (runtime).")
+    elif REPO_MAPPING.exists():
+        mapping_path = REPO_MAPPING
+        st.info("Χρησιμοποιείται store_mapping.json από το repo.")
     else:
-        bex_yesno_letter = st.text_input("Γράμμα στήλης BEX (YES/NO)", value="J")
+        mapping_path = None
+        st.caption("Δεν υπάρχει store_mapping.json — όλα τα stores θα πάνε στο NON-BEX, εκτός αν ορίσεις λίστα BEX παρακάτω.")
 
-with st.expander("🔤 Mapping με γράμματα Excel (A, N, AA, AF, AH)", expanded=True):
-    letter_plan_vs = st.text_input("plan_vs_target", value="A")
-    letter_mobile_act = st.text_input("mobile_actual", value="N")
-    letter_mobile_tgt = st.text_input("mobile_target", value="O")
-    letter_fixed_tgt = st.text_input("fixed_target", value="P")
-    letter_fixed_act = st.text_input("fixed_actual", value="Q")
-    letter_voice_vs = st.text_input("voice_vs_target", value="R")
-    letter_fixed_vs = st.text_input("fixed_vs_target", value="S")
-    letter_llu = st.text_input("llu_actual", value="T")
-    letter_nga = st.text_input("nga_actual", value="U")
-    letter_ftth = st.text_input("ftth_actual", value="V")
-    letter_eon = st.text_input("eon_tv_actual", value="X")
-    letter_fwa = st.text_input("fwa_actual", value="Y")
-    letter_mup = st.text_input("mobile_upgrades", value="AA")
-    letter_fup = st.text_input("fixed_upgrades", value="AB")
-    letter_pmob = st.text_input("pending_mobile", value="AF")
-    letter_pfix = st.text_input("pending_fixed", value="AH")
+with right:
+    st.subheader("BEX detection")
+    bex_mode = st.radio("Πώς βρίσκουμε αν είναι BEX;", ["Από λίστα", "Από στήλη (YES/NO)"], index=0)
+    bex_list = set()
+    bex_col = ""
+    if bex_mode == "Από λίστα":
+        bex_input = st.text_area("BEX stores (comma-separated)", "DRZ01, FKM01, ESC01, LND01, PKK01")
+        bex_list = {s.strip().upper() for s in bex_input.split(",") if s.strip()}
+    else:
+        bex_col = st.text_input("Όνομα στήλης στο Excel που έχει YES/NO για BEX", "bex_store")
 
-st.markdown("### 2) Προεπισκόπηση τιμών που θα περάσουν")
-preview_out = st.empty()
+# ── Excel upload ──
+st.subheader("2) Ανέβασε Excel")
+if pd is None:
+    st.error("Χρειάζονται pandas και openpyxl στο requirements.txt")
+    st.stop()
 
-run = st.button("⚙️ Generate")
+xls = st.file_uploader("Excel (.xlsx)", type=["xlsx"])
+sheet_name = st.text_input("Sheet (προαιρετικό — κενό για 1ο sheet)", value="")
+df = None
 
-# ───────────────────────────── MAIN ─────────────────────────────
-if run:
-    # checks
-    if not uploaded:
-        st.error("Ανέβασε Excel/CSV πρώτα.")
-        st.stop()
-    if not tpl_bex or not tpl_nonbex:
-        st.error("Ανέβασε και τα 2 templates (.docx).")
-        st.stop()
+if xls is not None:
+    try:
+        df = pd.read_excel(xls, sheet_name=sheet_name or 0)
+        orig_cols = list(df.columns)
+        norm_cols = [_norm_header(c) for c in df.columns]
+        df.columns = norm_cols
 
-    file_kb = len(uploaded.getbuffer()) / 1024
-    st.info(f"📄 Δεδομένα: {file_kb:.1f} KB | BEX tpl: {tpl_bex.size/1024:.1f} KB | Non-BEX tpl: {tpl_nonbex.size/1024:.1f} KB")
+        # alias για store_code
+        aliases = ["store", "storeid", "store_id", "code", "dealer", "dealerid", "dealer_id", "dealercode", "dealer_code"]
+        if "store_code" not in df.columns:
+            for a in aliases:
+                if a in df.columns:
+                    df.rename(columns={a: "store_code"}, inplace=True)
+                    break
 
-    df = read_data(uploaded, sheet_name)
+        st.markdown("**Headers (original):**")
+        st.code(str(orig_cols))
+        st.markdown("**Headers (normalized):**")
+        st.code(str(list(df.columns)))
+
+        st.success(f"OK: {len(df)} γραμμές, {len(df.columns)} στήλες.")
+        st.dataframe(df.head(15), use_container_width=True)
+
+    except Exception as e:
+        st.error(f"Σφάλμα ανάγνωσης Excel: {e}")
+
+# ── Template audit (προαιρετικό αλλά χρήσιμο) ──
+st.subheader("Template audit (placeholders που βρέθηκαν στα .docx)")
+audit_cols = st.columns(3)
+with audit_cols[0]:
+    if tpl_bex_path:
+        doc = Document(str(tpl_bex_path))
+        st.caption("BEX template placeholders:")
+        st.code(sorted(extract_placeholders_from_doc(doc)))
+with audit_cols[1]:
+    if tpl_nonbex_path:
+        doc = Document(str(tpl_nonbex_path))
+        st.caption("NON-BEX template placeholders:")
+        st.code(sorted(extract_placeholders_from_doc(doc)))
+with audit_cols[2]:
+    if uploaded_default_path:
+        doc = Document(str(uploaded_default_path))
+        st.caption("Default template placeholders:")
+        st.code(sorted(extract_placeholders_from_doc(doc)))
+
+# ── Generate ──
+st.subheader("3) Παραγωγή ανά κατάστημα & λήψη ZIP")
+go = st.button("🚀 Generate")
+
+if go:
     if df is None or df.empty:
-        st.error("Αποτυχία ανάγνωσης αρχείου ή άδειος πίνακας.")
+        st.error("Λείπουν δεδομένα Excel.")
         st.stop()
 
-    # Αν ο χρήστης είπε ότι τα δεδομένα ξεκινούν από γραμμή >1, κόψε τις πρώτες (start_row-2) γραμμές,
-    # ώστε το row index 0 να αντιστοιχεί στη γραμμή 'start_row'.
-    if start_row > 1:
-        df = df.iloc[start_row-2:].reset_index(drop=True)
+    # φόρτωσε mapping (αν υπάρχει)
+    store_map = load_store_mapping(mapping_path)
 
-    if debug_mode:
-        st.caption(f"Columns ({len(df.columns)}): {list(df.columns)}")
-        st.dataframe(df.head(10))
+    # In-memory zip
+    out_buf = io.BytesIO()
+    zf = zipfile.ZipFile(out_buf, "w", compression=zipfile.ZIP_DEFLATED)
+    generated: list[str] = []
+    errors: list[Tuple[str, str]] = []
 
-    # ── PREVIEW MAPPING (πρώτες 3 σειρές) ────────────────────────────
-    preview_rows = []
-    max_prev = min(3, len(df))
-    for ridx in range(max_prev):
-        row = df.iloc[ridx]
-        # store
-        if store_options == "Από γράμμα στήλης":
-            store_val = str(get_by_letter(row, store_letter)).strip()
-            store_from = f"letter {store_letter}"
-        else:
-            # Προσπαθώ από κλασικές κεφαλίδες:
-            candidates = ["Dealer_Code", "Dealer Code", "Shop Code", "Shop_Code", "ShopCode"]
-            store_val = ""
-            for c in candidates:
-                if c in df.columns:
-                    v = row[c]
-                    store_val = "" if pd.isna(v) else str(v)
-                    if store_val:
-                        break
-            store_from = "header"
-        # bex
-        if bex_mode == "Λίστα κωδικών":
-            bex_val = "YES" if store_val.upper() in bex_from_list else "NO"
-        else:
-            b = str(get_by_letter(row, bex_yesno_letter)).strip().lower()
-            bex_val = "YES" if b in ("yes", "y", "1", "true", "ναι") else "NO"
-
-        mapped = {
-            "row_excel": start_row + ridx,
-            "store": {"from": store_from, "value": store_val},
-            "bex": bex_val,
-            "plan_vs_target": get_by_letter(row, letter_plan_vs),
-            "mobile_actual": get_by_letter(row, letter_mobile_act),
-            "mobile_target": get_by_letter(row, letter_mobile_tgt),
-            "fixed_target": get_by_letter(row, letter_fixed_tgt),
-            "fixed_actual": get_by_letter(row, letter_fixed_act),
-            "voice_vs_target": get_by_letter(row, letter_voice_vs),
-            "fixed_vs_target": get_by_letter(row, letter_fixed_vs),
-            "llu_actual": get_by_letter(row, letter_llu),
-            "nga_actual": get_by_letter(row, letter_nga),
-            "ftth_actual": get_by_letter(row, letter_ftth),
-            "eon_tv_actual": get_by_letter(row, letter_eon),
-            "fwa_actual": get_by_letter(row, letter_fwa),
-            "mobile_upgrades": get_by_letter(row, letter_mup),
-            "fixed_upgrades": get_by_letter(row, letter_fup),
-            "pending_mobile": get_by_letter(row, letter_pmob),
-            "pending_fixed": get_by_letter(row, letter_pfix),
-        }
-        preview_rows.append(mapped)
-
-    preview_out.json(preview_rows)
-
-    # ── BUILD DOCS ───────────────────────────────────────────────────
-    tpl_bex_bytes = tpl_bex.read()
-    tpl_nonbex_bytes = tpl_nonbex.read()
-
-    out_zip = io.BytesIO()
-    zf = zipfile.ZipFile(out_zip, "w", zipfile.ZIP_DEFLATED)
-    built = 0
-    total_rows = len(df) if not test_mode else min(50, len(df))
-    pbar = st.progress(0, text="Δημιουργία εγγράφων…")
-
-    for idx in range(total_rows):
-        row = df.iloc[idx]
-        # STORE
-        if store_options == "Από γράμμα στήλης":
-            store = str(get_by_letter(row, store_letter)).strip()
-        else:
-            store = ""
-            for c in ["Dealer_Code", "Dealer Code", "Shop Code", "Shop_Code", "ShopCode"]:
-                if c in df.columns:
-                    v = row[c]
-                    store = "" if pd.isna(v) else str(v)
-                    if store:
-                        break
-        if not store:
-            pbar.progress((idx + 1) / total_rows, text=f"Παράλειψη γραμμής {start_row + idx} (κενό store)")
+    for _, row in df.iterrows():
+        row_dict = {k: ("" if _is_nan(v) else v) for k, v in row.to_dict().items()}
+        store_code = _safe_str(row_dict.get("store_code")).upper().strip()
+        if not store_code:
+            errors.append(("[missing store_code]", "Άδεια τιμή store_code"))
             continue
-        store_up = store.upper()
 
-        # BEX
-        if bex_mode == "Λίστα κωδικών":
-            is_bex = store_up in bex_from_list
-        else:
-            b = str(get_by_letter(row, bex_yesno_letter)).strip().lower()
-            is_bex = b in ("yes", "y", "1", "true", "ναι")
+        # mapping.json info (προαιρετικά)
+        info = store_map.get(store_code, store_map.get("_default", {}))
+        store_name = info.get("store_name", store_code)
+        category = info.get("category", "NON_BEX")
+        store_template_name = info.get("template", "default.docx")
 
-        # values
-        mapping = {
-            "title": f"Review September 2025 — Plan October 2025 — {store_up}",
-            "plan_month": "Review September 2025 — Plan October 2025",
-            "store": store_up,
-            "bex": "YES" if is_bex else "NO",
-            "plan_vs_target": get_by_letter(row, letter_plan_vs),
-            "mobile_actual": get_by_letter(row, letter_mobile_act),
-            "mobile_target": get_by_letter(row, letter_mobile_tgt),
-            "fixed_target": get_by_letter(row, letter_fixed_tgt),
-            "fixed_actual": get_by_letter(row, letter_fixed_act),
-            "voice_vs_target": fmt_percent(get_by_letter(row, letter_voice_vs)),
-            "fixed_vs_target": fmt_percent(get_by_letter(row, letter_fixed_vs)),
-            "llu_actual": get_by_letter(row, letter_llu),
-            "nga_actual": get_by_letter(row, letter_nga),
-            "ftth_actual": get_by_letter(row, letter_ftth),
-            "eon_tv_actual": get_by_letter(row, letter_eon),
-            "fwa_actual": get_by_letter(row, letter_fwa),
-            "mobile_upgrades": get_by_letter(row, letter_mup),
-            "fixed_upgrades": get_by_letter(row, letter_fup),
-            "pending_mobile": get_by_letter(row, letter_pmob),
-            "pending_fixed": get_by_letter(row, letter_pfix),
-        }
+        # override κατηγορίας από Excel αν έχεις στήλη category
+        if "category" in row_dict and str(row_dict["category"]).strip():
+            category = str(row_dict["category"]).strip()
 
-        # build doc
+        # ή από BEX detection σύμφωνα με UI
+        if bex_mode == "Από λίστα":
+            if store_code in bex_list:
+                category = "BEX"
+            else:
+                category = "NON_BEX"
+        else:  # Από στήλη YES/NO
+            flag = str(row_dict.get(_norm_header(bex_col), "")).strip().lower()
+            category = "BEX" if flag in {"yes", "y", "1", "true", "ναι"} else "NON_BEX"
+
+        # επίλεξε template με ιεραρχία (uploaded default -> category -> per-store -> repo default)
+        chosen_tpl = pick_template_path(
+            store_template_name,
+            category,
+            uploaded_default_path,
+            tpl_bex_path,
+            tpl_nonbex_path,
+        )
+        if not chosen_tpl.exists():
+            errors.append((store_code, f"Template δεν βρέθηκε: {chosen_tpl}"))
+            continue
+
+        # χτίσε mapping για placeholders
+        placeholders = build_placeholder_map(store_code, store_name, row_dict)
+
         try:
-            doc = Document(io.BytesIO(tpl_bex_bytes if is_bex else tpl_nonbex_bytes))
-            set_default_font(doc, "Aptos")
-            replace_placeholders(doc, mapping)
-            out_name = f"{store_up}_ReviewSep_PlanOct.docx"
-            buf = io.BytesIO()
-            doc.save(buf)
-            zf.writestr(out_name, buf.getvalue())
-            built += 1
-            pbar.progress((idx + 1) / total_rows, text=f"Φτιάχνω: {out_name} ({idx + 1}/{total_rows})")
+            doc = Document(str(chosen_tpl))
+            replace_all(doc, placeholders)
+            subdir = "BEX" if str(category).upper() == "BEX" else "NON_BEX"
+            out_name = f"{subdir}/Letter_{store_code}.docx"
+
+            mem = io.BytesIO()
+            doc.save(mem)
+            zf.writestr(out_name, mem.getvalue())
+            generated.append(out_name)
         except Exception as e:
-            st.warning(f"⚠️ Σφάλμα στη γραμμή {start_row + idx}: {e}")
-            if debug_mode:
-                st.exception(e)
+            errors.append((store_code, f"Docx error: {e}"))
 
     zf.close()
-    pbar.empty()
+    out_buf.seek(0)
 
-    if built == 0:
-        st.error("Δεν δημιουργήθηκε αρχείο. Έλεγξε STORE mapping & templates.")
-    else:
-        st.success(f"Έτοιμα {built} αρχεία.")
-        st.download_button("⬇️ Κατέβασε ZIP", data=out_zip.getvalue(), file_name="reviews_from_excel.zip")
+    if generated:
+        st.success(f"Δημιουργήθηκαν {len(generated)} αρχεία.")
+        st.download_button(
+            "⬇️ Κατέβασε ZIP",
+            data=out_buf.getvalue(),
+            file_name="Nova_Letters_BEX_NONBEX.zip",
+            mime="application/zip",
+        )
+        with st.expander("Περιεχόμενα ZIP"):
+            st.write("\n".join(generated))
+    if errors:
+        st.error("Αποτυχίες:")
+        for s, msg in errors:
+            st.write("•", s, "→", msg)
