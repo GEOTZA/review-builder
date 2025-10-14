@@ -1,6 +1,5 @@
 # app.py
-# Streamlit app: Excel → (BEX / NON-BEX) DOCX generator with robust placeholder replacement
-# by you + helper ♥
+# Streamlit: Excel → (BEX / NON-BEX) DOCX generator — stable build
 
 import io
 import re
@@ -16,7 +15,6 @@ from docx import Document
 # ───────────────────────────── Config ─────────────────────────────
 st.set_page_config(page_title="Excel → Review/Plan (BEX & Non-BEX)", layout="wide")
 TODAY = dt.date.today()
-HERE = Path(__file__).parent
 
 # ───────────────────────── Helpers ─────────────────────────
 _RX_PH = re.compile(r"\[\[([A-Za-z0-9_]+)\]\]")  # [[key]]
@@ -27,27 +25,34 @@ def format_percent(val: Any) -> str:
         x = float(val)
     except Exception:
         return "" if val is None else str(val)
-    # if already looks like 0-3 scale turn to percent
     if -3.0 <= x <= 3.0:
         return f"{x*100:.0f}%"
     return f"{x:.0f}%"
 
+def tidy_number(v: Any) -> Any:
+    """Return int if float is integer, round floats to 1 decimal, else keep as-is."""
+    try:
+        if isinstance(v, float):
+            if v.is_integer():
+                return int(v)
+            return round(v, 1)
+        return v
+    except Exception:
+        return v
+
 def _replace_in_paragraph(par, mapping: Dict[str, Any]):
-    # gather full text across runs
     full = "".join(r.text for r in par.runs)
-    # replace on the unified string
     def subfun(m):
         k = m.group(1)
         v = mapping.get(k, "")
         return "" if v is None else str(v)
     new_text = _RX_PH.sub(subfun, full)
-    # clear runs and set one new
     for r in list(par.runs):
         r._element.getparent().remove(r._element)
     par.add_run(new_text)
 
 def replace_placeholders_robust(doc: Document, mapping: Dict[str, Any]):
-    """Safe replacement in paragraphs + all table cells."""
+    """Safe replacement in paragraphs + all table cells (handles split runs)."""
     for p in doc.paragraphs:
         _replace_in_paragraph(p, mapping)
     for t in doc.tables:
@@ -57,7 +62,6 @@ def replace_placeholders_robust(doc: Document, mapping: Dict[str, Any]):
                     _replace_in_paragraph(p, mapping)
 
 def extract_placeholders_from_docx(doc: Document) -> set[str]:
-    """Scan a DOCX and return all [[placeholders]] it contains."""
     found = set()
     def scan(s: str):
         for m in _RX_PH.finditer(s or ""):
@@ -83,7 +87,6 @@ def col_by_letter(df: pd.DataFrame, letter: str) -> str | None:
     if not letter:
         return None
     L = letter.strip().upper()
-    # convert letters to 0-based index
     idx = 0
     for ch in L:
         if not ("A" <= ch <= "Z"):
@@ -98,7 +101,9 @@ def safe_get(row: pd.Series, col: str | None) -> Any:
     if not col or col not in row.index:
         return ""
     v = row[col]
-    return "" if pd.isna(v) else v
+    if pd.isna(v):
+        return ""
+    return tidy_number(v)
 
 # ───────────────────────────── UI ─────────────────────────────
 st.title("📊 Excel/CSV → 📄 Review/Plan Generator (BEX & Non-BEX)")
@@ -109,7 +114,7 @@ with left:
     st.subheader("1) Templates (.docx)")
     tpl_bex = st.file_uploader("BEX template", type=["docx"], key="tpl_bex")
     tpl_non = st.file_uploader("NON-BEX template", type=["docx"], key="tpl_non")
-    st.caption("Χρησιμοποίησε placeholders τύπου [[store]], [[plan_vs_target]], [[mobile_actual]] κ.λπ.")
+    st.caption("Χρησιμοποίησε placeholders όπως: [[store]], [[mobile_plan]], [[fixed_plan]], [[plan_vs_target]], [[mobile_actual]] κ.ά.")
 
 with right:
     st.subheader("2) Excel")
@@ -122,15 +127,17 @@ with st.expander("Ρυθμίσεις & BEX"):
     debug = st.toggle("🛠 Debug mode", value=False)
     test_mode = st.toggle("🧪 Test mode (πρώτες 50 γραμμές)", value=False)
     st.write("**BEX detection**")
-    bex_mode = st.radio("Πως βρίσκουμε αν είναι BEX;", ["Από στήλη (YES/NO)", "Από λίστα κωδικών"], index=0, horizontal=True)
+    bex_mode = st.radio("Πως βρίσκουμε αν είναι BEX;", ["Από στήλη (YES/NO)", "Από λίστα κωδικών"], index=1, horizontal=True)
     bex_list_input = st.text_input("BEX λίστα (comma separated)", value="DRZ01,FKM01,ESC01,LND01,PKK01").upper()
     bex_list = set(s.strip() for s in bex_list_input.split(",") if s.strip())
 
-st.subheader("3) Mapping με γράμματα Excel (προαιρετικό)")
+st.subheader("3) Mapping με γράμματα Excel")
 map_cols = {}
 cols_form = st.columns(4)
 labels = [
     ("plan_vs_target", "A"),
+    ("mobile_plan", "L"),     # ← ΝΕΟ
+    ("fixed_plan", "M"),      # ← ΝΕΟ
     ("mobile_actual", "N"),
     ("mobile_target", "O"),
     ("fixed_target", "P"),
@@ -149,7 +156,7 @@ labels = [
 ]
 for i, (key, default_letter) in enumerate(labels):
     with cols_form[i % 4]:
-        map_cols[key] = st.text_input(key, value=default_letter)
+        map_cols[key] = st.text_input(key, value=default_letter, key=f"map_{key}")
 
 st.divider()
 start = st.button("🔧 Generate")
@@ -164,7 +171,7 @@ if start:
         st.error("Ανέβασε και τα δύο templates (.docx).")
         st.stop()
 
-    # read excel
+    # read excel (no spinner to avoid indentation surprises)
     try:
         xfile = pd.ExcelFile(xls)
         if sheet_name not in xfile.sheet_names:
@@ -178,11 +185,10 @@ if start:
         st.stop()
 
     # find store column (robust)
-    store_col_candidates = ["store_code", "dealer_code", "dealer", "store", "shop_code", "shopcode", "code"]
+    store_col_candidates = ["shop_code", "shopcode", "store_code", "dealer_code", "dealer", "store", "code"]
     store_col = next((c for c in store_col_candidates if c in df.columns), None)
     if not store_col:
-        # fallback: first text-like column
-        store_col = df.columns[0]
+        store_col = df.columns[0]  # fallback
 
     # attach bex flag
     if bex_mode == "Από στήλη (YES/NO)":
@@ -201,6 +207,7 @@ if start:
     if debug:
         with st.expander("🔎 Mapping preview (letters → headers)"):
             st.json({k: {"letter": map_cols[k], "header": letter_to_col[k]} for k in map_cols})
+        st.write("Headers:", list(df.columns))
 
     # audit templates
     tpl_bex_bytes = tpl_bex.read()
@@ -222,7 +229,6 @@ if start:
     total_rows = len(df) if not test_mode else min(50, len(df))
     pbar = st.progress(0.0, text="Ξεκίνησε…")
 
-    # Which keys are percentages (format as 122%)
     percent_keys = {"plan_vs_target", "voice_vs_target", "fixed_vs_target"}
 
     for i, (_, row) in enumerate(df.head(total_rows).iterrows(), start=1):
@@ -236,10 +242,11 @@ if start:
             tpl_bytes = tpl_bex_bytes if is_bex else tpl_non_bytes
 
             # build mapping for placeholders
+            next_month = (TODAY.replace(day=1) + dt.timedelta(days=32)).replace(day=1)
             mapping: Dict[str, Any] = {
-                "title": f"Review {TODAY.strftime('%B %Y')} — Plan {(TODAY.replace(day=1) + dt.timedelta(days=32)).strftime('%B %Y')} — {store}",
+                "title": f"Review {TODAY.strftime('%B %Y')} — Plan {next_month.strftime('%B %Y')} — {store}",
                 "store": store,
-                "plan_month": f"Review {TODAY.strftime('%B %Y')} — Plan {(TODAY.replace(day=1) + dt.timedelta(days=32)).strftime('%B %Y')}",
+                "plan_month": f"Review {TODAY.strftime('%B %Y')} — Plan {next_month.strftime('%B %Y')}",
                 "bex": "YES" if is_bex else "NO",
             }
 
@@ -249,9 +256,9 @@ if start:
                 if key in percent_keys:
                     mapping[key] = format_percent(val)
                 else:
-                    mapping[key] = "" if val == "" else val
+                    mapping[key] = val
 
-            # also expose every df column as [[<header>]] if user wants it
+            # also expose every df column as [[<header>]] if needed
             for col in df.columns:
                 mapping.setdefault(col, safe_get(row, col))
 
@@ -277,12 +284,10 @@ if start:
         st.success(f"Έτοιμα {built} αρχεία.")
         st.download_button("⬇️ Κατέβασε ZIP", data=out_zip.getvalue(), file_name="reviews_from_excel.zip")
 
-    if debug:
+    if debug and len(df):
         with st.expander("🔍 Πρώτη γραμμή (mapping που περάσαμε στο DOCX)"):
-            if len(df):
-                # δείξε το mapping της πρώτης γραμμής όπως το φτιάχνουμε
-                row0 = df.iloc[0]
-                sample = {k: (format_percent(safe_get(row0, letter_to_col[k])) if k in percent_keys else safe_get(row0, letter_to_col[k]))
-                          for k in letter_to_col}
-                sample["store"] = safe_get(row0, store_col)
-                st.json(sample)
+            row0 = df.iloc[0]
+            sample = {k: (format_percent(safe_get(row0, letter_to_col[k])) if k in percent_keys else safe_get(row0, letter_to_col[k]))
+                      for k in letter_to_col}
+            sample["store"] = safe_get(row0, store_col)
+            st.json(sample)
